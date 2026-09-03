@@ -1,0 +1,280 @@
+// Supabase Postgres adapter — drop-in replacement for better-sqlite3 / sql.js / node:sqlite / bun:sqlite
+// Uses `postgres` (postgres.js) with raw SQL over Supabase's Postgres (DATABASE_URL / POSTGRES_URL).
+// Fallback: if postgres package not available or no DATABASE_URL, driver.js falls back to SQLite.
+//
+// Why `postgres` and not @supabase/supabase-js?
+//   - @supabase/supabase-js is PostgREST (REST), not raw SQL — would require rewriting every query.
+//   - `postgres` lets us keep 95% of existing SQLite SQL (just translate ? → $n and INSERT OR REPLACE).
+//
+// Interface matches other adapters:
+//   { driver, run(sql, params), get(sql, params), all(sql, params), exec(sql), transaction(fn), close(), raw }
+
+import { randomUUID } from "node:crypto";
+
+let globalSql = null;
+let txClient = null;
+
+function getClient() {
+  return txClient || globalSql;
+}
+
+// Postgres lowercases unquoted identifiers; app expects camelCase.
+// Normalize row keys so `row.authType` still works on Supabase.
+const LOWER_TO_CAMEL = {
+  authtype: "authType",
+  isactive: "isActive",
+  createdat: "createdAt",
+  updatedat: "updatedAt",
+  machineid: "machineId",
+  connectionid: "connectionId",
+  apikey: "apiKey",
+  prompttokens: "promptTokens",
+  completiontokens: "completionTokens",
+  datekey: "dateKey",
+};
+function normalizeRow(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+  let needs = false;
+  for (const k of Object.keys(row)) {
+    if (LOWER_TO_CAMEL[k] && !(LOWER_TO_CAMEL[k] in row)) { needs = true; break; }
+  }
+  if (!needs) return row;
+  const out = { ...row };
+  for (const [low, camel] of Object.entries(LOWER_TO_CAMEL)) {
+    if (low in out && !(camel in out)) out[camel] = out[low];
+  }
+  return out;
+}
+function normalizeRows(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(normalizeRow);
+}
+
+// Translate SQLite-isms to Postgres.
+//  - ? placeholders → $1,$2,...
+//  - INSERT OR REPLACE → INSERT ... ON CONFLICT DO UPDATE
+//  - INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING (rare, but handle)
+//  - PRAGMA / journal_mode etc → noop
+function translateSql(sql) {
+  if (!sql || typeof sql !== "string") return sql;
+
+  const trimmed = sql.trim();
+
+  // No-op pragmas and SQLite-only statements on Postgres
+  if (/^PRAGMA/i.test(trimmed) || /^PRAGMA\s/i.test(sql)) return null; // signal to skip
+  if (/wal_checkpoint/i.test(sql)) return null;
+  if (/VACUUM/i.test(trimmed)) return null;
+  if (/ATTACH DATABASE/i.test(trimmed)) return null;
+  if (/DETACH DATABASE/i.test(trimmed)) return null;
+  // PRAGMA table_info(...) used in syncSchemaFromTables — return null so caller can handle
+  if (/PRAGMA\s+table_info/i.test(sql)) return null;
+
+  let out = sql;
+
+  // INSERT OR REPLACE → Postgres upsert. Infer ON CONFLICT from column list when missing.
+  if (/^INSERT\s+OR\s+REPLACE\b/i.test(out)) {
+    if (/ON\s+CONFLICT/i.test(out)) {
+      out = out.replace(/^INSERT\s+OR\s+REPLACE\b/i, "INSERT");
+    } else {
+      out = out.replace(/^INSERT\s+OR\s+REPLACE\b/i, "INSERT");
+      out = out.replace(/;\s*$/, "");
+      if (!/ON\s+CONFLICT/i.test(out)) {
+        const colMatch = out.match(/INSERT\s+INTO\s+["']?([\w]+)["']?\s*\(([^)]+)\)/i);
+        if (colMatch) {
+          const table = colMatch[1].replace(/"/g, "").toLowerCase();
+          const cols = colMatch[2].split(",").map((c) => c.trim().replace(/"/g, ""));
+          const lowCols = cols.map((c) => c.toLowerCase());
+          let conflictCols = null;
+          let updateCols = [];
+          if (table === "kv" || (lowCols.includes("scope") && lowCols.includes("key"))) {
+            conflictCols = "(scope, key)";
+            updateCols = cols.filter((c) => !["scope", "key"].includes(c.toLowerCase()));
+          } else if (lowCols.includes("id")) {
+            conflictCols = "(id)";
+            updateCols = cols.filter((c) => c.toLowerCase() !== "id");
+          } else if (lowCols.includes("datekey")) {
+            conflictCols = "(dateKey)";
+            updateCols = cols.filter((c) => c.toLowerCase() !== "datekey");
+          } else if (lowCols.includes("key")) {
+            conflictCols = "(key)";
+            updateCols = cols.filter((c) => c.toLowerCase() !== "key");
+          }
+          if (conflictCols) {
+            if (updateCols.length) {
+              const sets = updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ");
+              out += ` ON CONFLICT${conflictCols} DO UPDATE SET ${sets}`;
+            } else {
+              out += ` ON CONFLICT${conflictCols} DO NOTHING`;
+            }
+          } else {
+            out += " ON CONFLICT DO NOTHING";
+          }
+        } else {
+          out += " ON CONFLICT DO NOTHING";
+        }
+      }
+    }
+  }
+
+  if (/^INSERT\s+OR\s+IGNORE\b/i.test(out)) {
+    out = out.replace(/^INSERT\s+OR\s+IGNORE\b/i, "INSERT");
+    if (!/ON\s+CONFLICT/i.test(out)) out += " ON CONFLICT DO NOTHING";
+  }
+
+  // ? -> $n (safe: no ? appears inside string literals in this codebase)
+  let idx = 0;
+  out = out.replace(/\?/g, () => `$${++idx}`);
+
+  return out;
+}
+
+function toPg(sqlStr) {
+  const t = translateSql(sqlStr);
+  return t; // may be null meaning skip
+}
+
+export async function createSupabaseAdapter(connectionString) {
+  let postgresPkg;
+  try {
+    postgresPkg = await import("postgres");
+  } catch (e) {
+    throw new Error(
+      `[DB] postgres package not installed. Run: npm install postgres — ${e.message}`,
+    );
+  }
+  const postgres = postgresPkg.default || postgresPkg;
+
+  // Reuse global connection across hot-reload / serverless invocations
+  if (!global._supabaseSql) global._supabaseSql = null;
+  if (global._supabaseSql) {
+    globalSql = global._supabaseSql;
+  } else {
+    // Serverless-friendly settings: low pool, no prepared statements (pgbouncer)
+    globalSql = postgres(connectionString, {
+      prepare: false,
+      max: 5,
+      idle_timeout: 10,
+      connect_timeout: 10,
+      max_lifetime: 60 * 30,
+      // Suppress notice logs
+      onnotice: () => {},
+    });
+    global._supabaseSql = globalSql;
+  }
+  const sql = globalSql;
+
+  // Verify connectivity — fail fast if connection string is wrong
+  try {
+    await sql`SELECT 1 as ok`;
+  } catch (e) {
+    console.warn(`[DB] Supabase connection test failed: ${e.message}`);
+    throw e;
+  }
+
+  console.log(`[DB] Driver: supabase-postgres | host: ${new URL(connectionString).hostname}`);
+
+  async function run(sqlStr, params = []) {
+    const pgSql = toPg(sqlStr);
+    if (pgSql === null) return { changes: 0, lastInsertRowid: 0 };
+    try {
+      const client = getClient();
+      const isInsert = /^\s*INSERT\b/i.test(pgSql);
+      const needsReturning = isInsert && /usageHistory/i.test(pgSql) && !/RETURNING/i.test(pgSql);
+      const finalSql = needsReturning ? `${pgSql} RETURNING id` : pgSql;
+      const rows = await client.unsafe(finalSql, params);
+      const lastId = rows?.[0]?.id ?? 0;
+      return { changes: rows ? (rows.length || 1) : 1, lastInsertRowid: Number(lastId) || 0 };
+    } catch (e) {
+      e.message = `[supabase] ${e.message} | SQL: ${sqlStr.slice(0, 200)}`;
+      throw e;
+    }
+  }
+
+  async function get(sqlStr, params = []) {
+    const pgSql = toPg(sqlStr);
+    if (pgSql === null) return undefined;
+    if (/PRAGMA\s+table_info/i.test(sqlStr)) return undefined;
+    try {
+      const client = getClient();
+      const rows = await client.unsafe(pgSql, params);
+      const row = rows?.[0] ?? undefined;
+      return row ? normalizeRow(row) : undefined;
+    } catch (e) {
+      if (/PRAGMA/i.test(sqlStr)) return undefined;
+      e.message = `[supabase] ${e.message} | SQL: ${sqlStr.slice(0, 200)}`;
+      throw e;
+    }
+  }
+
+  async function all(sqlStr, params = []) {
+    const pgSql = toPg(sqlStr);
+    if (pgSql === null) return [];
+    try {
+      const client = getClient();
+      const rows = await client.unsafe(pgSql, params);
+      return normalizeRows(rows ?? []);
+    } catch (e) {
+      if (/PRAGMA/i.test(sqlStr)) return [];
+      e.message = `[supabase] ${e.message} | SQL: ${sqlStr.slice(0, 200)}`;
+      throw e;
+    }
+  }
+
+  async function exec(sqlStr) {
+    if (!sqlStr || !sqlStr.trim()) return;
+    const stmts = sqlStr
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const stmt of stmts) {
+      const pgSql = toPg(stmt);
+      if (pgSql === null) continue;
+      if (!pgSql.trim()) continue;
+      try {
+        const client = getClient();
+        await client.unsafe(pgSql);
+      } catch (e) {
+        if (/PRAGMA/i.test(stmt)) continue;
+        if (/already exists/i.test(e.message) && /CREATE TABLE/i.test(stmt)) continue;
+        if (/already exists/i.test(e.message) && /CREATE INDEX/i.test(stmt)) continue;
+        e.message = `[supabase] ${e.message} | SQL: ${stmt.slice(0, 200)}`;
+        throw e;
+      }
+    }
+  }
+
+  async function transaction(fn) {
+    if (typeof sql.begin === "function") {
+      return await sql.begin(async (tx) => {
+        txClient = tx;
+        try {
+          const result = await fn();
+          return result;
+        } finally {
+          txClient = null;
+        }
+      });
+    }
+    txClient = null;
+    return await fn();
+  }
+
+  function close() {
+    try {
+      if (globalSql && typeof globalSql.end === "function") {
+        globalSql.end({ timeout: 2 }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  return {
+    driver: "supabase-postgres",
+    run,
+    get,
+    all,
+    exec,
+    transaction,
+    close,
+    raw: sql,
+  };
+}
