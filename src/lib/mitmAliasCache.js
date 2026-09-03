@@ -67,6 +67,15 @@ function writeAtomic(data) {
   }
 }
 
+function readCache() {
+  try {
+    if (!fs.existsSync(CACHE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 // Sync entire mitmAlias map from DB → JSON file
 export async function syncToJson() {
   try {
@@ -81,13 +90,12 @@ export async function syncToJson() {
 // Update cache for a single tool after UI saves to DB
 export function writeAliasForTool(tool, mappings) {
   try {
-    let current = {};
-    if (fs.existsSync(CACHE_FILE)) {
-      try { current = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); } catch { /* corrupted → reset */ }
-    }
+    const current = readCache() || {};
     current[tool] = mappings || {};
     writeAtomic(current);
   } catch (e) {
     console.log("[mitmAliasCache] write failed:", e.message);
   }
 }
+
+export { readCache, CACHE_FILE, DATA_DIR };
