@@ -2,13 +2,33 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
+function normalizeModelEntry(entry) {
+  if (typeof entry === "string") return entry.trim() || null;
+  if (entry && typeof entry === "object") {
+    if (typeof entry.value === "string" && entry.value.trim()) return entry.value.trim();
+    if (typeof entry.model === "string") {
+      const prov = typeof entry.provider === "string" && entry.provider.trim() ? entry.provider.trim() : "";
+      const mod = entry.model.trim();
+      if (!mod) return null;
+      return prov ? `${prov}/${mod}` : mod;
+    }
+    if (typeof entry.id === "string" && entry.id.trim()) return entry.id.trim();
+    if (typeof entry.name === "string" && entry.name.trim()) return entry.name.trim();
+  }
+  return null;
+}
+function normalizeModels(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(normalizeModelEntry).filter(Boolean);
+}
+
 function rowToCombo(row) {
   if (!row) return null;
   return {
     id: row.id,
     name: row.name,
     kind: row.kind,
-    models: parseJson(row.models, []),
+    models: normalizeModels(parseJson(row.models, [])),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -39,7 +59,7 @@ export async function createCombo(data) {
     id: uuidv4(),
     name: data.name,
     kind: data.kind || null,
-    models: data.models || [],
+    models: normalizeModels(data.models || []),
     createdAt: now,
     updatedAt: now,
   };
@@ -56,7 +76,10 @@ export async function updateCombo(id, data) {
   await db.transaction(async () => {
     const row = await db.get(`SELECT * FROM combos WHERE id = ?`, [id]);
     if (!row) return;
-    const merged = { ...rowToCombo(row), ...data, updatedAt: new Date().toISOString() };
+    const base = rowToCombo(row);
+    const patch = { ...data };
+    if (patch.models !== undefined) patch.models = normalizeModels(patch.models);
+    const merged = { ...base, ...patch, updatedAt: new Date().toISOString() };
     await db.run(
       `UPDATE combos SET name = ?, kind = ?, models = ?, updatedAt = ? WHERE id = ?`,
       [merged.name, merged.kind, stringifyJson(merged.models || []), merged.updatedAt, id]

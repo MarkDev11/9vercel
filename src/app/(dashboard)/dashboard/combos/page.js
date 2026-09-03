@@ -294,11 +294,26 @@ const STRATEGY_OPTIONS = [
   { value: "fusion", label: "Fusion — panel + judge" },
 ];
 
+function toModelString(m) {
+  if (typeof m === "string") return m;
+  if (m && typeof m === "object") {
+    if (typeof m.value === "string" && m.value.trim()) return m.value.trim();
+    if (typeof m.model === "string" && m.model.trim()) {
+      const p = typeof m.provider === "string" && m.provider.trim() ? m.provider.trim() : "";
+      return p ? `${p}/${m.model.trim()}` : m.model.trim();
+    }
+    if (typeof m.id === "string" && m.id.trim()) return m.id.trim();
+    if (typeof m.name === "string" && m.name.trim()) return m.name.trim();
+  }
+  return "";
+}
+
 function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
+  const displayModels = Array.isArray(combo.models) ? combo.models.map(toModelString).filter(Boolean) : [];
 
   return (
     <Card padding="sm" className="group">
@@ -310,18 +325,18 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
           <div className="min-w-0 flex-1">
             <code className="block truncate font-mono text-sm font-medium">{combo.name}</code>
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-              {combo.models.length === 0 ? (
+              {displayModels.length === 0 ? (
                 <span className="text-xs text-text-muted italic">No models</span>
               ) : (
-                combo.models.slice(0, 3).map((model, index) => (
+                displayModels.slice(0, 3).map((model, index) => (
                   <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
                     <span>{model}</span>
                     <CapacityBadges caps={getCaps?.(model)} />
                   </code>
                 ))
               )}
-              {combo.models.length > 3 && (
-                <span className="text-[10px] text-text-muted">+{combo.models.length - 3} more</span>
+              {displayModels.length > 3 && (
+                <span className="text-[10px] text-text-muted">+{displayModels.length - 3} more</span>
               )}
             </div>
             {/* Fusion: judge picker (Auto = first model) */}
@@ -334,7 +349,7 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
                   title="Pick the model that fuses panel answers"
                 >
                   <span className="material-symbols-outlined text-[13px]">gavel</span>
-                  <span className="truncate">{judge || `Auto — ${combo.models[0] || "first model"}`}</span>
+                  <span className="truncate">{judge || `Auto — ${displayModels[0] || "first model"}`}</span>
                 </button>
                 {judge && (
                   <button
