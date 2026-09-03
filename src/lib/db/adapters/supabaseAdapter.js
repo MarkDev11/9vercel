@@ -71,6 +71,18 @@ function translateSql(sql) {
 
   let out = sql;
 
+  // --- DDL translation SQLite -> Postgres ---
+  // usageHistory uses INTEGER PRIMARY KEY AUTOINCREMENT which Postgres rejects.
+  // Supabase schema uses SERIAL; translate here so auto-migrate (001-initial) works
+  // even if supabase/schema.sql was not run manually.
+  if (/CREATE\s+TABLE/i.test(out)) {
+    out = out.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, "SERIAL PRIMARY KEY");
+    // leftover AUTOINCREMENT (should not remain after above, but strip defensively)
+    out = out.replace(/\bAUTOINCREMENT\b/gi, "");
+    // SQLite REAL affinity -> Postgres DOUBLE PRECISION (REAL also works but be explicit)
+    // Keep TEXT/INTEGER as-is — Postgres accepts them.
+  }
+
   // INSERT OR REPLACE → Postgres upsert. Infer ON CONFLICT from column list when missing.
   if (/^INSERT\s+OR\s+REPLACE\b/i.test(out)) {
     if (/ON\s+CONFLICT/i.test(out)) {

@@ -90,4 +90,5 @@ graphify-out/*
 # local mirror - jangan push ke GitHub (duplikat _src 11MB)
 _src/
 patch_clean.mjs
+.tmp/
 

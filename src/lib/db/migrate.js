@@ -76,14 +76,20 @@ async function runVersionedMigrations(adapter) {
 }
 
 // ─── Auto-sync (additive only): add missing tables/columns/indexes ───────
+function isSupabase(adapter) { return adapter && adapter.driver === "supabase-postgres"; }
 async function syncSchemaFromTables(adapter) {
-  // On Supabase Postgres, schema is managed via supabase/schema.sql — skip SQLite PRAGMA diff.
-  if (adapter && adapter.driver === "supabase-postgres") return;
+  const supa = isSupabase(adapter);
   for (const [tableName, def] of Object.entries(TABLES)) {
-    // Create table if absent
+    // Create table if absent — works on both SQLite and Postgres (adapter translates AUTOINCREMENT→SERIAL)
     await adapter.exec(buildCreateTableSql(tableName, def));
 
-    // Diff columns
+    // Indexes (idempotent) — create for both engines
+    for (const idx of def.indexes || []) {
+      try { await adapter.exec(idx); } catch {}
+    }
+
+    // Diff columns via PRAGMA only on SQLite; Postgres relies on IF NOT EXISTS create above.
+    if (supa) continue;
     const existing = await adapter.all(`PRAGMA table_info(${tableName})`);
     const existingNames = new Set(existing.map((r) => r.name));
     for (const [colName, colDef] of Object.entries(def.columns)) {
@@ -101,11 +107,6 @@ async function syncSchemaFromTables(adapter) {
           console.warn(`[DB][sync] add column ${tableName}.${colName} failed: ${e.message}`);
         }
       }
-    }
-
-    // Indexes (idempotent)
-    for (const idx of def.indexes || []) {
-      try { await adapter.exec(idx); } catch {}
     }
   }
 }
@@ -222,23 +223,25 @@ export async function runMigrationOnce(adapter) {
   // Capture freshness BEFORE migrations stamp _meta (otherwise we'd misclassify
   // a brand-new DB as non-fresh once schemaVersion is written).
   const fresh = await isFreshDb(adapter);
+  const supa = isSupabase(adapter);
 
   // Prune stale backups every boot so old oversized backups shrink to KEEP.
-  pruneOldBackups();
+  // Skip on Vercel/Supabase (read-only FS / no-op).
+  if (!supa) { try { pruneOldBackups(); } catch {} }
 
   // Bootstrap _meta so we can read the stored backup schema version below
   // (runVersionedMigrations also ensures this, but we need it earlier here).
   await adapter.exec(buildCreateTableSql("_meta", TABLES._meta));
 
   // Detect a pending schema change via the central SCHEMA_VERSION const.
-  // A lightweight backup is taken BEFORE any schema mutation below.
+  // A lightweight backup is taken BEFORE any schema mutation below — skip on Supabase (no ATTACH).
   const storedSchemaVer = parseInt(await getMetaSync(adapter, "backupSchemaVersion", "0"), 10) || 0;
-  const schemaChanging = !fresh && storedSchemaVer < SCHEMA_VERSION;
+  const schemaChanging = !fresh && !supa && storedSchemaVer < SCHEMA_VERSION;
   if (schemaChanging) {
     try {
       const backupDir = makeBackupDir(`schema-${storedSchemaVer}-to-${SCHEMA_VERSION}`);
-      backupDbLite(adapter, backupDir);
-      pruneOldBackups();
+      await backupDbLite(adapter, backupDir);
+      try { pruneOldBackups(); } catch {}
       console.log(`[DB][migrate] pre-schema backup ${storedSchemaVer} → ${SCHEMA_VERSION}: ${backupDir}`);
     } catch (e) {
       console.warn(`[DB][migrate] pre-schema backup failed (continuing): ${e.message}`);
@@ -255,17 +258,18 @@ export async function runMigrationOnce(adapter) {
   await setMetaSync(adapter, "backupSchemaVersion", SCHEMA_VERSION);
 
   // 3. One-time legacy JSON import (only if DB was fresh on entry)
-  const alreadyImported = fs.existsSync(MIGRATED_MARKER);
+  let alreadyImported = false;
+  try { alreadyImported = fs.existsSync(MIGRATED_MARKER); } catch {}
   const legacyMain = readJsonSafe(LEGACY_FILES.main);
   const legacyUsage = readJsonSafe(LEGACY_FILES.usage);
   const legacyDisabled = readJsonSafe(LEGACY_FILES.disabled);
   const legacyDetails = readJsonSafe(LEGACY_FILES.details);
   const hasLegacy = !!(legacyMain || legacyUsage || legacyDisabled || legacyDetails);
 
-  if (fresh && hasLegacy && !alreadyImported) {
+  if (fresh && hasLegacy && !alreadyImported && !supa) {
     const t0 = Date.now();
-    const backupDir = makeBackupDir("migrate-from-json");
-    for (const f of Object.values(LEGACY_FILES)) backupFile(f, backupDir);
+    let backupDir = null;
+    try { backupDir = makeBackupDir("migrate-from-json"); for (const f of Object.values(LEGACY_FILES)) backupFile(f, backupDir); } catch {}
 
     try {
       await adapter.transaction(async () => {
@@ -286,7 +290,7 @@ export async function runMigrationOnce(adapter) {
     }
 
     try { fs.writeFileSync(MIGRATED_MARKER, new Date().toISOString()); } catch {}
-    pruneOldBackups();
+    try { pruneOldBackups(); } catch {}
     console.log(`[DB][migrate] JSON → SQLite in ${Date.now() - t0}ms | legacy JSON kept at DATA_DIR | backup: ${backupDir}`);
     return;
   }
