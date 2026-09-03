@@ -1,5 +1,6 @@
 // Vercel Cron — menggantikan setInterval backgroundTokenRefresh di serverless.
-// Dipanggil tiap 15 menit via vercel.json crons. Fail-open: error tidak throw 500.
+// Dipanggil daily via vercel.json crons (Hobby: daily saja, Pro bisa tiap 15 menit).
+// Fail-open: error tidak throw 500.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
