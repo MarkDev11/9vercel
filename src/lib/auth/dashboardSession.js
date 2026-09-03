@@ -10,14 +10,24 @@ const DEFAULT_PASSWORD = "123456";
 
 function loadJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.VERCEL) {
+    // On Vercel FS is read-only; JWT_SECRET must be set via env — generate ephemeral fallback if missing (will invalidate sessions on cold start, but avoids crash)
+    console.warn("[auth] JWT_SECRET not set on Vercel — using ephemeral secret (set JWT_SECRET env to persist sessions)");
+    return crypto.randomBytes(32).toString("hex");
+  }
   const file = path.join(DATA_DIR, "jwt-secret");
   try {
     return fs.readFileSync(file, "utf8").trim();
   } catch {}
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const generated = crypto.randomBytes(32).toString("hex");
-  fs.writeFileSync(file, generated, { mode: 0o600 });
-  return generated;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const generated = crypto.randomBytes(32).toString("hex");
+    fs.writeFileSync(file, generated, { mode: 0o600 });
+    return generated;
+  } catch (e) {
+    console.warn(`[auth] jwt-secret write failed (${e?.code || e?.message}) — using ephemeral secret`);
+    return crypto.randomBytes(32).toString("hex");
+  }
 }
 
 const SECRET = new TextEncoder().encode(loadJwtSecret());

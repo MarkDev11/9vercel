@@ -13,6 +13,18 @@ export const LEGACY_FILES = {
 };
 export function ensureDirs() {
   for (const dir of [DATA_DIR, DB_DIR, BACKUPS_DIR]) {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    try {
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      if (process.env.VERCEL) {
+        console.warn(`[DB] ensureDirs skipped on Vercel (${dir}: ${e?.code || e?.message})`);
+        continue;
+      }
+      if (e?.code === "EROFS" || e?.code === "ENOSPC" || e?.code === "ENOTDIR") {
+        console.warn(`[DB] ensureDirs skipped (${dir}: ${e.code})`);
+        continue;
+      }
+      throw e;
+    }
   }
 }

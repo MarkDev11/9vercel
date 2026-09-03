@@ -54,9 +54,17 @@ function baseId(modelId) {
 }
 
 function writeAtomic(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(`${file}.tmp`, contents, "utf8");
-  fs.renameSync(`${file}.tmp`, file);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, contents, "utf8");
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (e) {
+    if (process.env.VERCEL) {
+      console.warn(`[modelCatalog] writeAtomic skipped on Vercel (${e?.code || e?.message})`);
+      return;
+    }
+    throw e;
+  }
 }
 
 // Trimmed copy of the upstream catalog, kept for the add-models skill: same
@@ -225,8 +233,12 @@ function restoreEtag() {
   try {
     state.etag = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8")).etag || null;
     state.lastSync = fs.statSync(CATALOG_FILE).mtimeMs;
-  } catch {
+  } catch (e) {
     state.etag = null;
+    // On Vercel the catalog file lives under /tmp and may be absent every cold start — that's fine
+    if (process.env.VERCEL && e?.code && e.code !== "ENOENT") {
+      console.warn(`[modelCatalog] restoreEtag skipped on Vercel (${e.code})`);
+    }
   }
 }
 
@@ -234,7 +246,10 @@ function restoreEtag() {
 export function startModelCatalogSync() {
   if (timer) return;
   if (String(process.env.MODEL_CATALOG_SYNC || "").toLowerCase() === "off") return;
-  restoreEtag();
+  try { restoreEtag(); } catch (e) {
+    console.warn(`[modelCatalog] restoreEtag failed (${e?.code || e?.message}) — continuing without catalog`);
+    state.etag = null;
+  }
 
   const schedule = (delay) => {
     timer = setTimeout(async () => {
