@@ -21,6 +21,12 @@ export async function POST() {
     await loadPxpipe();
     return NextResponse.json(getPxpipeStatus());
   } catch (error) {
-    return NextResponse.json({ error: error.message, code: error.code || null }, { status: 500 });
+    // Fork note (Vercel): /tmp is ephemeral and npm is unavailable on
+    // serverless, so install failures are expected states (409/503), not 500s.
+    const status = error.code === "NOT_INSTALLED" ? 409
+      : ["NPM_NOT_FOUND", "EACCES", "EROFS", "ENOSPC"].includes(error.code) || /npm|install|EROFS|ENOSPC|read-only/i.test(error.message || "")
+        ? 503
+        : 500;
+    return NextResponse.json({ error: error.message, code: error.code || null }, { status });
   }
 }
