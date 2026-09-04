@@ -28,26 +28,39 @@ function getClient() {
 
 // Postgres lowercases unquoted identifiers; app expects camelCase.
 // Normalize row keys so `row.authType` still works on Supabase.
-// Generic lower→camel fold covers every current + future column (testStatus,
-// authType, …) without maintaining an allowlist that silently drops new keys.
+// Unquoted camelCase columns fold to all-lowercase with NO underscores
+// (isActive→isactive, createdAt→createdat, apiKey→apikey…), so a generic
+// underscore-splitter can never recover them — map the folded form back
+// explicitly. Keep the underscore fallback for any future snake_case keys.
+const FOLDED_TO_CAMEL = {
+  authtype: "authType",
+  isactive: "isActive",
+  createdat: "createdAt",
+  updatedat: "updatedAt",
+  teststatus: "testStatus",
+  machineid: "machineId",
+  connectionid: "connectionId",
+  apikey: "apiKey",
+  prompttokens: "promptTokens",
+  completiontokens: "completionTokens",
+  datekey: "dateKey",
+};
 function lowerToCamel(key) {
+  if (Object.prototype.hasOwnProperty.call(FOLDED_TO_CAMEL, key)) return FOLDED_TO_CAMEL[key];
   return key.replace(/_([a-z0-9])/gi, (_, c) => String(c).toUpperCase());
 }
 function normalizeRow(row) {
   if (!row || typeof row !== "object" || Array.isArray(row)) return row;
   let needs = false;
   for (const k of Object.keys(row)) {
-    // Postgres-folded keys are all-lowercase with no underscores (e.g.
-    // "teststatus"); skip keys that already look camelCase.
-    if (k === k.toLowerCase() && !k.includes("_") && k !== lowerToCamel(k) && !(lowerToCamel(k) in row)) { needs = true; break; }
+    const camel = lowerToCamel(k);
+    if (camel !== k && !(camel in row)) { needs = true; break; }
   }
   if (!needs) return row;
   const out = { ...row };
   for (const k of Object.keys(row)) {
-    if (k === k.toLowerCase() && !k.includes("_")) {
-      const camel = lowerToCamel(k);
-      if (camel !== k && !(camel in out)) out[camel] = out[k];
-    }
+    const camel = lowerToCamel(k);
+    if (camel !== k && !(camel in out)) out[camel] = out[k];
   }
   return out;
 }
