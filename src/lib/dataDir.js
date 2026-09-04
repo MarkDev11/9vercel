@@ -16,6 +16,9 @@ function defaultDir() {
 }
 
 export function getDataDir() {
+  // Tests/dev: allow pointing the whole data dir (SQLite file, legacy JSON,
+  // jwt-secret) at a temp dir without touching prod paths.
+  if (process.env.NINEROUTER_DATA) return process.env.NINEROUTER_DATA;
   const configured = process.env.DATA_DIR;
   if (!configured) return defaultDir();
   if (process.platform === "win32" && /^\//.test(configured)) {

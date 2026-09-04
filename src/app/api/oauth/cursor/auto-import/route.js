@@ -76,10 +76,7 @@ const normalize = (value) => {
  * Extract tokens via better-sqlite3 (bundled dependency).
  * This is the preferred strategy — no external CLI required.
  */
-function extractTokensViaBetterSqlite(dbPath) {
-  // Dynamic require so the route stays importable even if native bindings fail
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Database = require("better-sqlite3");
+function extractTokensViaBetterSqlite(dbPath, Database) {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 
   const query = (key) => {
@@ -218,9 +215,11 @@ export async function GET() {
       }
     }
 
-    // Strategy 1: better-sqlite3 (bundled — no external tools required)
+    // Strategy 1: better-sqlite3 (optional native dep — dynamic import so the
+    // route stays importable on Vercel where native bindings are absent)
     try {
-      const tokens = extractTokensViaBetterSqlite(dbPath);
+      const { default: Database } = await import("better-sqlite3");
+      const tokens = extractTokensViaBetterSqlite(dbPath, Database);
       if (tokens.accessToken && tokens.machineId) {
         return NextResponse.json({
           found: true,

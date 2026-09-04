@@ -84,7 +84,17 @@ function handleResponsesEvent(eventType, parsed, state) {
         const item = terminalOutput[i];
         if (!item || typeof item !== "object") continue;
         // Prefer indexed placement: message items land after reasoning items.
-        if (!state.items.has(i)) state.items.set(i, item);
+        // The terminal payload is authoritative (full items) — it wins over
+        // delta-accumulated partials, which may be truncated or reordered.
+        const existing = state.items.get(i);
+        if (!existing || (existing.status === "in_progress" && item.status !== "in_progress")) {
+          state.items.set(i, item);
+        } else if (existing.type === "message" && item.type === "message") {
+          const terminalText = extractMessageText(item);
+          if (terminalText && terminalText.length >= extractMessageText(existing).length) {
+            state.items.set(i, item);
+          }
+        }
       }
       // Merge delta-accumulated text into any message item that arrived empty.
       if (state.textDeltas) {

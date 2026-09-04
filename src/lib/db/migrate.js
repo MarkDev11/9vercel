@@ -31,7 +31,8 @@ async function importWithAssertion(adapter, tableName, rows, insertFn, rowMeta) 
     try { await insertFn(row); }
     catch (err) { dropped.push({ ...rowMeta(row), reason: err.message }); }
   }
-  const inserted = (await adapter.get(`SELECT COUNT(*) as c FROM ${tableName}`))?.c ?? 0;
+  // Postgres returns COUNT(*) as BIGINT/string — coerce before comparing.
+  const inserted = Number((await adapter.get(`SELECT COUNT(*) as c FROM ${tableName}`))?.c ?? 0);
   if (inserted !== rows.length) {
     console.warn(`[DB][migrate] ${tableName} row-count mismatch: expected ${rows.length}, got ${inserted}. Dropped:`, dropped);
     throw new MigrationAborted(`${tableName} row-count mismatch: expected ${rows.length}, got ${inserted}`, dropped);
@@ -47,7 +48,7 @@ async function isFreshDb(adapter) {
   // Table _meta may not exist yet on truly fresh DB
   try {
     const row = await adapter.get(`SELECT COUNT(*) as c FROM _meta`);
-    return !row || row.c === 0;
+    return !row || Number(row.c) === 0;
   } catch {
     return true;
   }
@@ -266,7 +267,12 @@ export async function runMigrationOnce(adapter) {
   const legacyDetails = readJsonSafe(LEGACY_FILES.details);
   const hasLegacy = !!(legacyMain || legacyUsage || legacyDisabled || legacyDetails);
 
-  if (fresh && hasLegacy && !alreadyImported && !supa) {
+  // Supabase used to be excluded here (!supa): a fresh Supabase DB with legacy
+  // JSON files present (e.g. local DATA_DIR mounted at first deploy) skipped
+  // the import entirely — including the disabledModels kv rows — and stamped
+  // nothing, so the flags were silently lost. Run the import on both engines;
+  // only the FS side-effects (file backup, marker) stay SQLite/local-only.
+  if (fresh && hasLegacy && !alreadyImported) {
     const t0 = Date.now();
     let backupDir = null;
     try { backupDir = makeBackupDir("migrate-from-json"); for (const f of Object.values(LEGACY_FILES)) backupFile(f, backupDir); } catch {}

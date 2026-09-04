@@ -246,6 +246,13 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
   delete result.reasoning;
   delete result.client_metadata;
 
+  // Carry the gateway-resolved transport decision onto the translated Chat
+  // body: chatCore computes stream from body + Accept header + tool quirks and
+  // passes it as the `stream` arg, so the upstream transport always matches
+  // the gateway's downstream framing (a stale client `stream` here would make
+  // the upstream return JSON while the gateway pipes SSE, or vice versa).
+  result.stream = stream;
+
   return result;
 }
 

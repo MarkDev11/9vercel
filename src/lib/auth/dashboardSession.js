@@ -11,9 +11,10 @@ const DEFAULT_PASSWORD = "123456";
 function loadJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
   if (process.env.VERCEL) {
-    // On Vercel FS is read-only; JWT_SECRET must be set via env — generate ephemeral fallback if missing (will invalidate sessions on cold start, but avoids crash)
-    console.warn("[auth] JWT_SECRET not set on Vercel — using ephemeral secret (set JWT_SECRET env to persist sessions)");
-    return crypto.randomBytes(32).toString("hex");
+    // On Vercel FS is read-only and instances are stateless — an ephemeral
+    // secret would mint sessions that fail verify on the next instance (login
+    // loop). Fail fast so the missing env is visible instead of flaky.
+    throw new Error("[auth] JWT_SECRET must be set via env on Vercel to persist sessions across instances");
   }
   const file = path.join(DATA_DIR, "jwt-secret");
   try {

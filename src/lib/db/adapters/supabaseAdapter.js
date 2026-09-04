@@ -12,36 +12,42 @@
 import { randomUUID } from "node:crypto";
 
 let globalSql = null;
-let txClient = null;
+
+// Transaction client is tracked per-transaction via AsyncLocalStorage so
+// concurrent sql.begin() callbacks on serverless never share/overwrite it.
+// Falls back to a module-global only on runtimes without node:async_hooks
+// (always present on Node 16+, but keep the fallback for Bun/edge safety).
+import { AsyncLocalStorage } from "node:async_hooks";
+const txStore = typeof AsyncLocalStorage !== "undefined" ? new AsyncLocalStorage() : null;
+let txClientFallback = null;
 
 function getClient() {
-  return txClient || globalSql;
+  if (txStore) return txStore.getStore() || globalSql;
+  return txClientFallback || globalSql;
 }
 
 // Postgres lowercases unquoted identifiers; app expects camelCase.
 // Normalize row keys so `row.authType` still works on Supabase.
-const LOWER_TO_CAMEL = {
-  authtype: "authType",
-  isactive: "isActive",
-  createdat: "createdAt",
-  updatedat: "updatedAt",
-  machineid: "machineId",
-  connectionid: "connectionId",
-  apikey: "apiKey",
-  prompttokens: "promptTokens",
-  completiontokens: "completionTokens",
-  datekey: "dateKey",
-};
+// Generic lower→camel fold covers every current + future column (testStatus,
+// authType, …) without maintaining an allowlist that silently drops new keys.
+function lowerToCamel(key) {
+  return key.replace(/_([a-z0-9])/gi, (_, c) => String(c).toUpperCase());
+}
 function normalizeRow(row) {
   if (!row || typeof row !== "object" || Array.isArray(row)) return row;
   let needs = false;
   for (const k of Object.keys(row)) {
-    if (LOWER_TO_CAMEL[k] && !(LOWER_TO_CAMEL[k] in row)) { needs = true; break; }
+    // Postgres-folded keys are all-lowercase with no underscores (e.g.
+    // "teststatus"); skip keys that already look camelCase.
+    if (k === k.toLowerCase() && !k.includes("_") && k !== lowerToCamel(k) && !(lowerToCamel(k) in row)) { needs = true; break; }
   }
   if (!needs) return row;
   const out = { ...row };
-  for (const [low, camel] of Object.entries(LOWER_TO_CAMEL)) {
-    if (low in out && !(camel in out)) out[camel] = out[low];
+  for (const k of Object.keys(row)) {
+    if (k === k.toLowerCase() && !k.includes("_")) {
+      const camel = lowerToCamel(k);
+      if (camel !== k && !(camel in out)) out[camel] = out[k];
+    }
   }
   return out;
 }
@@ -195,7 +201,16 @@ export async function createSupabaseAdapter(connectionString) {
       const finalSql = needsReturning ? `${pgSql} RETURNING id` : pgSql;
       const rows = await client.unsafe(finalSql, params);
       const lastId = rows?.[0]?.id ?? 0;
-      return { changes: rows ? (rows.length || 1) : 1, lastInsertRowid: Number(lastId) || 0 };
+      // postgres.js Result is a row array carrying `.count` (affected rows).
+      // UPDATE/DELETE without RETURNING yield [] even when rows were
+      // affected — prefer .count there. INSERT … ON CONFLICT DO NOTHING that
+      // touches 0 rows must report 0, never inflate to 1.
+      const count = Array.isArray(rows) && typeof rows.count === "number" ? rows.count : null;
+      let changes;
+      if (rows && rows.length) changes = rows.length;
+      else if (count !== null) changes = count;
+      else changes = isInsert ? 1 : 0;
+      return { changes, lastInsertRowid: Number(lastId) || 0 };
     } catch (e) {
       e.message = `[supabase] ${e.message} | SQL: ${sqlStr.slice(0, 200)}`;
       throw e;
@@ -258,16 +273,17 @@ export async function createSupabaseAdapter(connectionString) {
   async function transaction(fn) {
     if (typeof sql.begin === "function") {
       return await sql.begin(async (tx) => {
-        txClient = tx;
+        // Scope the tx client to this transaction's async context so parallel
+        // transactions on the same adapter never see each other's client.
+        if (txStore) return await txStore.run(tx, () => fn());
+        txClientFallback = tx;
         try {
-          const result = await fn();
-          return result;
+          return await fn();
         } finally {
-          txClient = null;
+          txClientFallback = null;
         }
       });
     }
-    txClient = null;
     return await fn();
   }
 

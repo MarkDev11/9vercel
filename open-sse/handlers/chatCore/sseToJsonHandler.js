@@ -253,14 +253,20 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         : {};
       let finalResp;
 
-      // Extract tool calls from Responses API output (function_call items)
-      const funcCallItems = (jsonResponse.output || []).filter(item => item.type === "function_call");
+      // Extract tool calls from Responses API output — both function_call
+      // and custom_tool_call (Codex) items; the latter carry `input` instead
+      // of `arguments` and were previously dropped, losing custom tools.
+      const funcCallItems = (jsonResponse.output || []).filter(
+        item => item.type === "function_call" || item.type === "custom_tool_call"
+      );
       const toolCalls = funcCallItems.map((item, idx) => ({
-        id: item.call_id || `call_${item.name}_${Date.now()}_${idx}`,
+        id: item.call_id || item.id || `call_${item.name}_${Date.now()}_${idx}`,
         type: "function",
         function: {
           name: item.name,
-          arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {})
+          arguments: item.type === "custom_tool_call"
+            ? JSON.stringify(item.input ?? {})
+            : (typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {}))
         }
       }));
       const hasToolCalls = toolCalls.length > 0;

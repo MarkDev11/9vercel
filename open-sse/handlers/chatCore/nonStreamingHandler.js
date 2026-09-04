@@ -119,7 +119,12 @@ function openAICompletionToResponses(responseBody, customToolNames = null) {
   }
 
   const usage = responseBody.usage || {};
-  const status = choice.finish_reason === "tool_calls" ? "completed" : (choice.finish_reason === "stop" ? "completed" : (choice.finish_reason || "completed"));
+  // Responses `status` has no "length" — a truncated Chat completion surfaces
+  // as "incomplete" (truncation visible) rather than leaking "length" through
+  // or masquerading as "completed".
+  const status = choice.finish_reason === "tool_calls" || choice.finish_reason === "stop"
+    ? "completed"
+    : (choice.finish_reason === "length" ? "incomplete" : (choice.finish_reason || "completed"));
 
   return {
     id: `resp_${responseBody.id || ""}`.replace(/^resp_chatcmpl-/, "resp_"),
@@ -160,20 +165,42 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
   // Last non-empty message item wins — early blocks are often empty.
   if (targetFormat === FORMATS.OPENAI_RESPONSES && sourceFormat === FORMATS.OPENAI) {
     let textContent = "";
+    const toolCalls = [];
     for (const item of responseBody?.output || []) {
-      if (item?.type !== "message" || !Array.isArray(item.content)) continue;
-      const text = item.content.map((c) => (typeof c?.text === "string" ? c.text : "")).filter(Boolean).join("");
-      if (text) textContent = text;
+      if (item?.type === "message" && Array.isArray(item.content)) {
+        const text = item.content.map((c) => (typeof c?.text === "string" ? c.text : "")).filter(Boolean).join("");
+        if (text) textContent = text;
+        continue;
+      }
+      // function_call / custom_tool_call → Chat tool_calls (mirror of the
+      // SSE-path extraction in sseToJsonHandler; without this non-streaming
+      // tool calls vanish while streaming preserves them).
+      if (item?.type === "function_call" || item?.type === "custom_tool_call") {
+        const isCustom = item.type === "custom_tool_call";
+        toolCalls.push({
+          id: item.call_id || item.id || `call_${toolCalls.length}`,
+          type: "function",
+          function: {
+            name: item.name || "",
+            arguments: isCustom
+              ? JSON.stringify(item.input ?? {})
+              : (typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {})),
+          },
+        });
+      }
     }
     const respUsage = responseBody?.usage || {};
     const inTokens = respUsage.input_tokens || 0;
     const outTokens = respUsage.output_tokens || 0;
+    const message = { role: "assistant", content: textContent || (toolCalls.length ? null : "") };
+    if (toolCalls.length) message.tool_calls = toolCalls;
+    const finishReason = toolCalls.length ? "tool_calls" : (responseBody.status === "completed" ? "stop" : (responseBody.status || "stop"));
     return {
       id: responseBody.id ? String(responseBody.id).replace(/^resp_/, "chatcmpl-") : `chatcmpl-${Date.now()}`,
       object: "chat.completion",
       created: responseBody.created_at || Math.floor(Date.now() / 1000),
       model: responseBody.model || "unknown",
-      choices: [{ index: 0, message: { role: "assistant", content: textContent || "" }, finish_reason: responseBody.status === "completed" ? "stop" : (responseBody.status || "stop") }],
+      choices: [{ index: 0, message, finish_reason: finishReason }],
       usage: { prompt_tokens: inTokens, completion_tokens: outTokens, total_tokens: inTokens + outTokens },
     };
   }

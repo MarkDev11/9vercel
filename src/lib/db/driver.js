@@ -58,21 +58,33 @@ function wrapAsync(adapter) {
         }
       }
       if (isAsync) {
-        // Manual async transaction using exec BEGIN/COMMIT (works for all sqlite adapters)
+        // Manual async transaction using exec BEGIN/COMMIT (works for all sqlite adapters).
+        // Serialize: a second BEGIN while one is open would hit SQLITE_BUSY
+        // ("cannot start a transaction within a transaction") — queue behind the
+        // in-flight transaction instead of hiding the error and committing early.
+        // The chain lives on the underlying adapter so all wrapped handles share it.
+        if (!orig._asyncTxChain) orig._asyncTxChain = Promise.resolve();
+        const prev = orig._asyncTxChain;
+        let release;
+        const cur = new Promise((resolve) => { release = resolve; });
+        orig._asyncTxChain = prev.then(() => cur);
+        await prev;
         try {
-          await orig.exec("BEGIN");
-        } catch {}
-        try {
-          result = await cb();
+          // BEGIN failure here is real (locked/corrupt) — surface it, never
+          // pretend a transaction is open.
+          await orig.exec("BEGIN IMMEDIATE");
           try {
-            await orig.exec("COMMIT");
-          } catch {}
+            result = await cb();
+          } catch (err) {
+            try {
+              await orig.exec("ROLLBACK");
+            } catch {}
+            throw err;
+          }
+          await orig.exec("COMMIT");
           return result;
-        } catch (err) {
-          try {
-            await orig.exec("ROLLBACK");
-          } catch {}
-          throw err;
+        } finally {
+          release();
         }
       }
       return result;

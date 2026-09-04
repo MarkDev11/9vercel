@@ -242,7 +242,15 @@ export async function saveRequestUsage(entry) {
   try {
     const db = await getAdapter();
 
-    if (!entry.timestamp) entry.timestamp = new Date().toISOString();
+    // Only a CALLER-SUPPLIED timestamp can act as a retry key: a retry passes
+    // the same explicit timestamp, while one the gateway stamps here regenerates
+    // on every call. ISO timestamps resolve to milliseconds, so two distinct
+    // auto-stamped requests in the same ms with the same token shape looked
+    // identical — the payload-only dedupe below silently dropped them (measured:
+    // 100 concurrent saves → 1–2 rows). Auto-stamped entries therefore always
+    // insert; explicit-timestamp entries still dedupe for genuine retries.
+    const explicitTimestamp = Boolean(entry.timestamp);
+    if (!explicitTimestamp) entry.timestamp = new Date().toISOString();
     entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
 
     const tokens = entry.tokens || {};
@@ -251,31 +259,36 @@ export async function saveRequestUsage(entry) {
 
     let inserted = false;
 
-    // All 3 writes (history insert, daily upsert, lifetime counter) in ONE transaction.
-    // better-sqlite3 is sync → no JS yield mid-transaction → no race in same process.
+    // All 3 writes (history insert, daily upsert, lifetime counter) in ONE
+    // serialized transaction. Concurrent-safe: the dedupe SELECT and the
+    // daily-summary read-merge-write run inside the serialized driver chain,
+    // so whole transactions execute one at a time and no await gap yields mid-tx.
     await db.transaction(async () => {
-      const existing = await db.get(
-        `SELECT id, endpoint FROM usageHistory
-         WHERE timestamp = ?
-           AND COALESCE(provider, '') = COALESCE(?, '')
-           AND COALESCE(model, '') = COALESCE(?, '')
-           AND COALESCE(connectionId, '') = COALESCE(?, '')
-           AND COALESCE(apiKey, '') = COALESCE(?, '')
-           AND promptTokens = ?
-           AND completionTokens = ?
-         ORDER BY id DESC LIMIT 1`,
-        [
-          entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null,
-          promptTokens, completionTokens,
-        ]
-      );
+      // Retry dedupe by exact payload — only for explicit timestamps.
+      if (explicitTimestamp) {
+        const existing = await db.get(
+          `SELECT id, endpoint FROM usageHistory
+           WHERE timestamp = ?
+             AND COALESCE(provider, '') = COALESCE(?, '')
+             AND COALESCE(model, '') = COALESCE(?, '')
+             AND COALESCE(connectionId, '') = COALESCE(?, '')
+             AND COALESCE(apiKey, '') = COALESCE(?, '')
+             AND promptTokens = ?
+             AND completionTokens = ?
+           ORDER BY id DESC LIMIT 1`,
+          [
+            entry.timestamp, entry.provider || null, entry.model || null,
+            entry.connectionId || null, entry.apiKey || null,
+            promptTokens, completionTokens,
+          ]
+        );
 
-      if (existing) {
-        if (!existing.endpoint && entry.endpoint) {
-          await db.run(`UPDATE usageHistory SET endpoint = ? WHERE id = ?`, [entry.endpoint, existing.id]);
+        if (existing) {
+          if (!existing.endpoint && entry.endpoint) {
+            await db.run(`UPDATE usageHistory SET endpoint = ? WHERE id = ?`, [entry.endpoint, existing.id]);
+          }
+          return;
         }
-        return;
       }
 
       await db.run(
