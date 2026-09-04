@@ -1,45 +1,47 @@
-# Deploy 9vercel ke Vercel + Supabase
+# Deploy 9vercel to Vercel + Supabase
 
-> Lokal (Laragon/Windows) tetap jalan pakai SQLite tanpa config apa pun.
-> Vercel wajib Supabase — filesystem Vercel ephemeral (data SQLite hilang tiap deploy).
+> Local dev (Laragon/Windows) works with SQLite and zero config.
+> Vercel requires Supabase — the Vercel filesystem is ephemeral (SQLite data is wiped on every deploy).
+
+For the Indonesian version, see [`DEPLOY_VERCEL_ID.md`](./DEPLOY_VERCEL_ID.md).
 
 ---
 
-## 1) Supabase — sekali setup
+## 1) Supabase — one-time setup
 
-### A. Buat / buka project
-1. Supabase Dashboard → New project → beri nama, set database password, pilih region terdekat.
-2. Catat **project ref** (bagian `<ref>.supabase.co` dari Project URL) dan **region** — hostname pooler mengikuti region project kamu (mis. `aws-0-ap-northeast-1.pooler.supabase.com`). Jangan tebak hostname — selalu copy dari dashboard project kamu sendiri.
+### A. Create / open a project
+1. Supabase Dashboard → New project → give it a name, set a database password, pick the nearest region.
+2. Note the **project ref** (the `<ref>.supabase.co` part of the Project URL) and the **region** — the pooler hostname embeds the region (e.g. `aws-0-<region>.pooler.supabase.com`). Never guess the hostname — always copy it from your own project's dashboard.
 
-### B. Jalankan schema SQL
-1. Buka **Supabase Dashboard → SQL Editor → New query**
-2. Copy-paste isi file `supabase/schema.sql` dari repo ini → **Run**
-3. Aman di-run ulang (`IF NOT EXISTS`). Harus sukses tanpa error.
+### B. Run the schema SQL
+1. Open **Supabase Dashboard → SQL Editor → New query**
+2. Copy-paste the full contents of `supabase/schema.sql` from this repo → **Run**
+3. Safe to re-run (`IF NOT EXISTS`). Must succeed with no errors.
 
-File itu membuat 11 tabel: `_meta`, `settings`, `providerConnections`, `providerNodes`, `proxyPools`, `apiKeys`, `combos`, `kv`, `usageHistory`, `usageDaily`, `requestDetails` + seed `settings(id=1)`.
+It creates 11 tables: `_meta`, `settings`, `providerConnections`, `providerNodes`, `proxyPools`, `apiKeys`, `combos`, `kv`, `usageHistory`, `usageDaily`, `requestDetails` + seed `settings(id=1)`.
 
-> **Catatan deploy saat ini:** skema juga bisa auto-create saat boot (migrasi `001-initial` dijalankan di Vercel build/runtime walau `supabase/schema.sql` belum di-run manual). Tetap disarankan run manual sekali untuk verifikasi.
+> **Boot safety net:** the schema can also auto-create at boot (migration `001-initial` runs at Vercel build/runtime even if `supabase/schema.sql` was never run manually). Still, running it once manually is the supported, verifiable path.
 
-### C. Ambil `DATABASE_URL` yang benar
-Di **Project Settings → Database → Connection string → URI**:
+### C. Get the right `DATABASE_URL`
+In **Project Settings → Database → Connection string → URI**:
 
-- **Untuk Vercel / serverless — WAJIB pakai Transaction Pooler (port 6543):**
+- **For Vercel / serverless — you MUST use the Transaction Pooler (port 6543):**
   ```
   postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true
   ```
-  Copy yang labelnya **Transaction pooler** (atau **Session pooler / 6543**) dari dashboard project kamu. Jangan pakai yang `db.<ref>.supabase.co:5432` untuk Vercel — direct sering `ENETUNREACH` IPv6 di build Vercel dan tanpa pgbouncer cepat `too many clients`.
+  Copy the entry labeled **Transaction pooler** (or **Session pooler / 6543**) from your own dashboard. Do not use `db.<ref>.supabase.co:5432` for Vercel — direct connections often hit `ENETUNREACH` IPv6 during Vercel builds and exhaust `max_connections` (`too many clients`) without pgbouncer.
 
-  > Host pooler mengikuti region project kamu (mis. `aws-0-ap-southeast-1`, `aws-0-us-east-1`). Selalu copy dari dashboard, jangan tebak.
+  > The pooler host follows your project's region (e.g. `aws-0-ap-southeast-1`, `aws-0-us-east-1`). Always copy from the dashboard, never guess.
 
-- **Untuk lokal/dev** boleh pakai direct `5432` juga jalan, tapi `6543?pgbouncer=true` juga boleh dan sudah diverifikasi.
+- **For local/dev** either string works; the `6543?pgbouncer=true` pooler string is verified to work locally too.
 
-> Ganti `[YOUR-PASSWORD]` dengan **Database password** yang kamu set saat create project.
-> Lupa password? **Project Settings → Database → Reset database password**.
+> Replace `[YOUR-PASSWORD]` with the **database password** you set at project creation.
+> Forgot it? **Project Settings → Database → Reset database password**.
 
-### D. Publishable key — tidak wajib untuk DB
-Publishable key (`sb_publishable_...`) dan secret key (`sb_secret_...`, Project Settings → API Keys) itu untuk Supabase Auth / PostgREST client.
-**9vercel tidak memakainya untuk DB** — DB lewat `DATABASE_URL` (driver `postgres` / `postgres.js`), bukan `@supabase/supabase-js`. Jadi kalau cuma deploy DB, cukup `DATABASE_URL` saja.
-Jika nanti pakai fitur Supabase Auth client-side, baru set (copy dari dashboard project kamu):
+### D. Publishable key — not needed for the DB
+The publishable key (`sb_publishable_...`) and secret key (`sb_secret_...`, Project Settings → API Keys) are for Supabase Auth / PostgREST clients.
+**9vercel does not use them for the DB** — the DB goes through `DATABASE_URL` (the `postgres` / postgres.js driver), not `@supabase/supabase-js`. For a DB-only deploy, `DATABASE_URL` alone is enough.
+If you later add client-side Supabase Auth features, set (copied from your own dashboard):
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
@@ -49,76 +51,88 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
 
 ## 2) Env vars
 
-### Lokal (`C:\laragon\www\9vercel\.env` atau `.env.local`)
+### Local (`C:\laragon\www\9vercel\.env` or `.env.local`)
 ```env
-# Kosongkan DATABASE_URL → otomatis pakai SQLite (file di %APPDATA%/9router)
-# Atau isi kalau mau test Supabase dari lokal (copy Transaction pooler dari dashboard):
+# Empty DATABASE_URL → SQLite automatically (file in %APPDATA%/9router)
+# Or fill it in to test Supabase locally (copy the Transaction pooler from the dashboard):
 DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true
 
-JWT_SECRET=ganti-min-32-char-random
-INITIAL_PASSWORD=ganti-dengan-password-dashboard
+JWT_SECRET=replace-with-min-32-char-random
+INITIAL_PASSWORD=replace-with-dashboard-password
 ```
-Jika `DATABASE_URL` kosong atau masih `[YOUR-PASSWORD]`, app akan log:
-`[DB] DATABASE_URL contains placeholder — skipping Supabase, falling back to SQLite` dan tetap jalan.
+If `DATABASE_URL` is empty or still `[YOUR-PASSWORD]`, the app logs:
+`[DB] DATABASE_URL contains placeholder — skipping Supabase, falling back to SQLite` and keeps running.
+
+### Dashboard password (`INITIAL_PASSWORD` and the `123456` fallback)
+
+Login resolution order (`src/lib/auth/dashboardSession.js` → `verifyDashboardPassword`):
+
+1. If a password hash is stored in settings (i.e. you already changed the password via Dashboard → Profile/Settings), that hash wins — `INITIAL_PASSWORD` is ignored.
+2. Otherwise the app compares against `INITIAL_PASSWORD` from env.
+3. If `INITIAL_PASSWORD` is unset, it falls back to the upstream 9Router default **`123456`** (same as stock 9Router).
+
+So on a fresh deploy without `INITIAL_PASSWORD`, just log in with `123456`, then change it in Dashboard → Profile/Settings. After the first change, the DB hash takes over and the env value no longer matters. On production you should still set `INITIAL_PASSWORD` in Vercel env so the very first login is never the public default.
+
+> Live production already runs with env vars set — this only describes the fallback chain for fresh/public deploys.
 
 ### Vercel (Dashboard → Project → Settings → Environment Variables)
-Wajib:
+Required:
 
-| Key | Nilai | Catatan |
-|-----|-------|---------|
-| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooling 6543 + `?pgbouncer=true`, user `postgres.<ref>` (copy Transaction pooler dari dashboard). Alias `POSTGRES_URL` juga didukung. |
-| `JWT_SECRET` | random panjang (≥32 char) | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `INITIAL_PASSWORD` | password login dashboard | Password yang kamu set sendiri (dipakai saat login pertama, sebelum password tersimpan di DB) |
+| Key | Value | Notes |
+|-----|-------|-------|
+| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooling 6543 + `?pgbouncer=true`, user `postgres.<ref>` (copy the Transaction pooler from the dashboard). `POSTGRES_URL` alias also supported. |
+| `JWT_SECRET` | long random (≥32 chars) | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `INITIAL_PASSWORD` | dashboard login password | Used on first login before a password hash is stored in the DB; falls back to `123456` when unset (change it in Dashboard → Profile/Settings right after first login) |
 
-Opsional tapi disarankan:
+Recommended:
 
-| Key | Nilai | Catatan |
-|-----|-------|---------|
-| `CRON_SECRET` | random hex 32 | Amankan `/api/cron/refresh-tokens`. Generate: `openssl rand -hex 32` |
-| `NINEROUTER_PEER_TOKEN` | random hex 24+ | Bukti `x-9r-real-ip` valid untuk rate-limit login. Jika kosong, fallback `vercel-middleware` dipakai. |
+| Key | Value | Notes |
+|-----|-------|-------|
+| `CRON_SECRET` | random hex 32 | Secures `/api/cron/refresh-tokens`. Generate: `openssl rand -hex 32` |
+| `NINEROUTER_PEER_TOKEN` | random hex 24+ | Proves `x-9r-real-ip` is genuine for login rate-limiting. When empty, the `vercel-middleware` fallback is used. |
 
-Lainnya: `DATA_DIR` **jangan** di-set di Vercel (hanya self-host).
+Also: do NOT set `DATA_DIR` on Vercel (self-host only).
 
-> Lihat `.env.example` di repo untuk referensi lengkap + komentar per-var.
+> See `.env.example` in the repo for the full reference with per-var comments.
 
 ---
 
-## 3) Deploy ke Vercel
+## 3) Deploy to Vercel
 
-### Opsi A — via GitHub (disarankan)
-1. Push repo `9vercel` ke GitHub (private boleh).
-2. Vercel Dashboard → **Add New Project → Import** repo tersebut.
-3. Framework preset: **Next.js** (auto-detect).
-4. Set **Environment Variables** seperti tabel di atas (Production + Preview).
+### Option A — via GitHub (recommended)
+1. Push the `9vercel` repo to GitHub (private is fine).
+2. Vercel Dashboard → **Add New Project → Import** that repo.
+3. Framework preset: **Next.js** (auto-detected).
+4. Set **Environment Variables** as in the table above (Production + Preview).
 5. Deploy.
 
-### Opsi B — via CLI
+### Option B — via CLI
 ```bash
 npm i -g vercel
 cd C:/laragon/www/9vercel
-vercel          # linking pertama kali
-vercel --prod   # deploy production
-vercel env add DATABASE_URL   # lalu paste value Transaction pooler 6543 dari dashboard
+vercel          # first-time linking
+vercel --prod   # production deploy
+vercel env add DATABASE_URL   # then paste the Transaction pooler 6543 value from the dashboard
 vercel env add JWT_SECRET
 vercel env add INITIAL_PASSWORD
-vercel --prod   # redeploy agar env kepakai
+vercel --prod   # redeploy so the env takes effect
 ```
 
 ### Build
-- Lokal test: `npm run build` (sudah verified — compiled successfully, 137 pages, postbuild copy standalone).
-- Vercel build juga `npm run build`; `next.config.mjs` otomatis non-aktifkan `output: standalone` saat `VERCEL=1` supaya tidak bentrok dengan Vercel tracing. Verified: `VERCEL=1 npm run build` sukses, `No standalone build found` (expected).
-- **Pooler di build:** log `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` menandakan env kepakai. Jika masih `better-sqlite3` atau `ENETUNREACH db.<ref>.supabase.co:5432`, cek `DATABASE_URL` masih direct — ganti ke pooler 6543.
+- Local check: `npm run build` (verified — compiled successfully, 137 pages, postbuild standalone copy).
+- Vercel builds with `npm run build` too; `next.config.mjs` automatically disables `output: standalone` when `VERCEL=1` so it doesn't clash with Vercel tracing. Verified: `VERCEL=1 npm run build` succeeds, `No standalone build found` (expected).
+- **Pooler at build time:** the log `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` means the env is picked up. If you still see `better-sqlite3` or `ENETUNREACH db.<ref>.supabase.co:5432`, `DATABASE_URL` is still the direct one — switch to the 6543 pooler.
 
 ---
 
-## 4) Cron — refresh token OAuth
+## 4) Cron — OAuth token refresh
 
 - File: `src/app/api/cron/refresh-tokens/route.js` (`GET`/`POST`, `maxDuration: 60`, fail-open).
-- Jadwal: `vercel.json` → `crons: [{ path: "/api/cron/refresh-tokens", schedule: "0 0 * * *" }]` (daily — Hobby hanya boleh daily, `*/15` butuh Pro).
-- Fungsi: memanggil `runBackgroundTokenRefreshTick()` — refresh OAuth yang akan expired dalam 30 menit.
-- Auth: `CRON_SECRET` wajib — handler cek `Authorization: Bearer <CRON_SECRET>` atau `x-cron-secret`. Vercel Cron akan kirim Bearer otomatis jika secret di-set.
-- **Fix penting:** `src/dashboardGuard.js` sudah menambahkan `/api/cron/refresh-tokens` ke `PUBLIC_API_PATHS`. Tanpa ini, `dashboardGuard` mengembalikan 401 duluan sebelum handler sempat cek `CRON_SECRET` — cron tidak akan pernah 200 walau secret benar (bug yang sudah diperbaiki di `7fecc90`).
-- Verifikasi:
+- Schedule: `vercel.json` → `crons: [{ path: "/api/cron/refresh-tokens", schedule: "0 0 * * *" }]` (daily — Hobby allows daily only, `*/15` needs Pro).
+- What it does: calls `runBackgroundTokenRefreshTick()` — refreshes OAuth tokens expiring within 30 minutes.
+- Auth: `CRON_SECRET` is required — the handler checks `Authorization: Bearer <CRON_SECRET>` or `x-cron-secret`. Vercel Cron sends the Bearer token automatically when the secret is configured.
+- **Important fix:** `src/dashboardGuard.js` already lists `/api/cron/refresh-tokens` in `PUBLIC_API_PATHS`. Without it, `dashboardGuard` returns 401 before the handler can check `CRON_SECRET` — cron would never return 200 even with the right secret.
+- Verify:
   ```bash
   curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/cron/refresh-tokens
   # expect: {"ok":true,"elapsedMs":...}
@@ -126,62 +140,63 @@ vercel --prod   # redeploy agar env kepakai
   # expect: 401 Unauthorized
   ```
 
-Di lokal/self-host, scheduler tetap jalan via `custom-server.js` + `initializeApp` (`setInterval` 5 menit) — tidak butuh cron.
+Locally/self-hosted the scheduler keeps running via `custom-server.js` + `initializeApp` (5-minute `setInterval`) — no cron needed.
 
 ---
 
-## 5) Real IP & rate-limit di Vercel
+## 5) Real IP & rate-limit on Vercel
 
-- Self-host: `custom-server.js` stempel `x-9r-real-ip` dari TCP socket + `x-9r-peer-token` (per-process secret).
-- Vercel: `src/proxy.js` (Next `proxy` / dulu `middleware`) stempel `x-9r-real-ip` dari `x-forwarded-for` (Vercel Edge) + `request.ip` fallback, lalu forward ke `dashboardGuard`.
-- `src/lib/auth/trustedPeer.js` percaya header jika `x-9r-peer-token === NINEROUTER_PEER_TOKEN` atau (`VERCEL=1` dan token `vercel-middleware`). Ini mencegah spoof `x-9r-real-ip` untuk bypass `loginLimiter`.
+- Self-host: `custom-server.js` stamps `x-9r-real-ip` from the TCP socket + `x-9r-peer-token` (per-process secret).
+- Vercel: `src/proxy.js` (Next `proxy`, formerly `middleware`) stamps `x-9r-real-ip` from `x-forwarded-for` (Vercel Edge) + `request.ip` fallback, then forwards to `dashboardGuard`.
+- `src/lib/auth/trustedPeer.js` trusts the header if `x-9r-peer-token === NINEROUTER_PEER_TOKEN` or (`VERCEL=1` and token `vercel-middleware`). This prevents `x-9r-real-ip` spoofing to bypass `loginLimiter`.
 
-Tidak perlu set `TRUST_PROXY`.
+No need to set `TRUST_PROXY`.
 
 ---
 
-## 6) Verifikasi setelah deploy
+## 6) Verify after deploy
 
-1. Buka `https://<project>.vercel.app/login` → login pakai `INITIAL_PASSWORD` yang kamu set → harus masuk dashboard.
-2. Cek log Vercel (Deployments → Logs): harus ada `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` (bukan `better-sqlite3`). Jika masih `better-sqlite3`, berarti `DATABASE_URL` belum kepakai / masih placeholder.
-3. Test API: `curl https://<project>.vercel.app/api/health` dan `POST /api/auth/login`.
-4. Manual trigger cron (wajib pakai secret setelah fix dashboardGuard): `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/cron/refresh-tokens` → `{"ok":true,...}`
-5. Di Supabase Dashboard → Table Editor → cek `providerConnections`, `settings`, dll terisi setelah kamu tambah provider. Test write: `POST /api/combos` lalu `GET /api/combos` harus persist (pooler Supabase, bukan SQLite ephemeral).
+1. Open `https://<project>.vercel.app/login` → log in with `INITIAL_PASSWORD` (or `123456` on a fresh deploy without it, then change it in Dashboard → Profile/Settings) → dashboard should load.
+2. Check the Vercel logs (Deployments → Logs): you must see `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` (not `better-sqlite3`). If you still see `better-sqlite3`, `DATABASE_URL` isn't applied / is still a placeholder.
+3. API test: `curl https://<project>.vercel.app/api/health` and `POST /api/auth/login`.
+4. Trigger cron manually (secret required): `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/cron/refresh-tokens` → `{"ok":true,...}`
+5. In Supabase Dashboard → Table Editor → check `providerConnections`, `settings`, etc. fill up after you add a provider. Write test: `POST /api/combos` then `GET /api/combos` must persist (Supabase pooler, not ephemeral SQLite).
 
-Contoh hasil yang benar:
-- Log menampilkan `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com`
-- Supabase Dashboard → Table Editor → tabel `providerConnections`, `combos`, dll terisi setelah kamu tambah data
+A healthy deploy looks like:
+- Logs show `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com`
+- Supabase Dashboard → Table Editor → `providerConnections`, `combos`, etc. fill up as you add data
 
 ---
 
 ## 7) Troubleshooting
 
-| Gejala | Penyebab | Fix |
-|--------|----------|-----|
-| Build sukses tapi log `[DB] DATABASE_URL contains placeholder` | Env masih `[YOUR-PASSWORD]` | Ganti dengan password real, redeploy |
-| `password authentication failed` | Password salah / user salah (`postgres` bukan `postgres.<ref>` untuk pooler) | Untuk pooler pakai `postgres.<ref>`; reset password di Supabase |
-| `ENOTFOUND aws-0-...pooler.supabase.com` | Region pooler salah | Copy host pooler yang tepat dari Project Settings → Database project kamu |
-| `ENETUNREACH db.<ref>.supabase.co:5432` di build Vercel | Pakai direct 5432 di serverless (IPv6) | Ganti ke `6543?pgbouncer=true` pooler |
-| `too many clients` / `max_connections` | Pakai port 5432 tanpa pgbouncer di serverless | Ganti ke `6543?pgbouncer=true` (Transaction pooler) |
-| Cron selalu 401 walau `CRON_SECRET` benar | `dashboardGuard` block sebelum handler (bug lama) | Sudah fix di `7fecc90` — pastikan deploy terbaru; lalu test `curl -H "Authorization: Bearer $CRON_SECRET" /api/cron/refresh-tokens` |
-| Cron tidak jalan sama sekali | Hobby plan + schedule `*/15` | Repo sudah `0 0 * * *` (daily). `*/15` butuh Pro. |
-| Login rate-limit bypass warning | `NINEROUTER_PEER_TOKEN` tidak set | Set di Vercel env (opsional, fallback ada tapi less strict) |
-| Lokal Windows warning `DATA_DIR '/var/lib/9router' is a Unix path` | `.env` dari Linux | Kosongkan `DATA_DIR` di lokal atau set ke path Windows valid; sudah auto-fallback ke `%APPDATA%/9router` |
+| Symptom | Cause | Fix |
+|--------|-------|-----|
+| Build succeeds but log says `[DB] DATABASE_URL contains placeholder` | Env still has `[YOUR-PASSWORD]` | Paste the real password, redeploy |
+| `password authentication failed` | Wrong password / wrong user (`postgres` instead of `postgres.<ref>` for the pooler) | Use `postgres.<ref>` for the pooler; reset the password in Supabase |
+| `ENOTFOUND aws-0-...pooler.supabase.com` | Wrong pooler region | Copy the exact host from your project's Project Settings → Database |
+| `ENETUNREACH db.<ref>.supabase.co:5432` in the Vercel build | Direct 5432 doesn't work on serverless IPv6 | Switch to the `6543?pgbouncer=true` pooler |
+| `too many clients` / `max_connections` | Port 5432 without pgbouncer | Same fix: Transaction pooler 6543 |
+| Cron always 401 even with the right `CRON_SECRET` | `dashboardGuard` blocking before the handler (old bug) | Already fixed — make sure you're on the latest deploy; then retest with the Bearer curl above |
+| Cron never runs at all | Non-daily schedule on Hobby | Keep `0 0 * * *` (daily); sub-daily needs Pro |
+| First login doesn't work | Forgot whether `INITIAL_PASSWORD` was set | Try `123456` (default fallback); check `INITIAL_PASSWORD` in Vercel env |
+| Login rate-limit bypass warning | `NINEROUTER_PEER_TOKEN` not set | Set it in Vercel env (optional, a fallback exists but is less strict) |
+| Local Windows warning `DATA_DIR '/var/lib/9router' is a Unix path` | Linux-style `.env` copied to Windows | Unset `DATA_DIR` locally or set a valid Windows path; auto-falls back to `%APPDATA%/9router` |
 
 ---
 
-## 8) File yang diubah untuk Vercel
+## 8) Files changed for Vercel
 
-- `src/lib/db/adapters/supabaseAdapter.js` — baru, translate `?→$n`, `INSERT OR REPLACE→ON CONFLICT`, normalize camelCase
+- `src/lib/db/adapters/supabaseAdapter.js` — new, translates `?→$n`, `INSERT OR REPLACE→ON CONFLICT`, camelCase normalization
 - `src/lib/db/driver.js` — auto-switch Supabase-first, `wrapAsync` always-async, placeholder guard, `global._supabaseSql` reuse
-- `supabase/schema.sql` — DDL Postgres (IF NOT EXISTS, unquoted identifiers + normalize)
-- `src/proxy.js` — stempel `x-9r-real-ip` untuk Vercel (gabung dengan dashboardGuard)
-- `src/dashboardGuard.js` — tambah `/api/cron/refresh-tokens` ke `PUBLIC_API_PATHS` agar `CRON_SECRET` bisa lewat
-- `src/lib/auth/trustedPeer.js` — trust Vercel middleware fallback
-- `src/shared/services/initializeApp.js` — skip cloudflared/MITM di `VERCEL=1`, cron gantikan interval
-- `src/app/api/cron/refresh-tokens/route.js` — baru (`GET`/`POST`, cek `Bearer`/`x-cron-secret`, fail-open)
+- `supabase/schema.sql` — Postgres DDL (IF NOT EXISTS, unquoted identifiers + normalize)
+- `src/proxy.js` — stamps `x-9r-real-ip` for Vercel (merged with dashboardGuard)
+- `src/dashboardGuard.js` — added `/api/cron/refresh-tokens` to `PUBLIC_API_PATHS` so `CRON_SECRET` can pass
+- `src/lib/auth/trustedPeer.js` — trusts the Vercel middleware fallback
+- `src/shared/services/initializeApp.js` — skips cloudflared/MITM on `VERCEL=1`, cron replaces the interval
+- `src/app/api/cron/refresh-tokens/route.js` — new (`GET`/`POST`, checks `Bearer`/`x-cron-secret`, fail-open)
 - `vercel.json` — crons `0 0 * * *` (daily Hobby) + `maxDuration: 60`
-- `next.config.mjs` — `output: standalone` dimatikan saat `VERCEL=1`
-- `package.json` — tambah `postgres@^3.4.9`
-- `.env.example` — dokumentasi env Supabase/Vercel
-- `src/lib/db/**` — semua repos/helpers/migrate/index di-async-kan untuk Postgres
+- `next.config.mjs` — `output: standalone` disabled when `VERCEL=1`
+- `package.json` — added `postgres@^3.4.9`
+- `.env.example` — Supabase/Vercel env documentation
+- `src/lib/db/**` — all repos/helpers/migrate/index async-ified for Postgres

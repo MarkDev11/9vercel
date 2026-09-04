@@ -134,8 +134,9 @@ How it works: `src/lib/db/driver.js` auto-selects the database at boot — if `D
 otherwise it falls back to local SQLite. The `postgres` package is already in `dependencies`,
 and `next.config.mjs` automatically disables `output: standalone` when `VERCEL=1` is set.
 
-> Full walkthrough with screenshots-level detail, live project IDs, and the complete
-> troubleshooting matrix lives in [`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md).
+> Full walkthrough with screenshots-level detail and the complete
+> troubleshooting matrix lives in [`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md) (English)
+> and [`DEPLOY_VERCEL_ID.md`](./DEPLOY_VERCEL_ID.md) (Bahasa Indonesia).
 > Below is the condensed, keep-it-green path.
 
 ### Prerequisites
@@ -240,7 +241,7 @@ Required:
 |-----|-------|-------|
 | `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooler 6543 + `?pgbouncer=true`, user `postgres.<ref>`. `POSTGRES_URL` also accepted. If unset or still `[YOUR-PASSWORD]`, the app logs a placeholder warning and falls back to SQLite (data will NOT persist). |
 | `JWT_SECRET` | long random (≥32 chars) | Mandatory on Vercel — boot throws without it. |
-| `INITIAL_PASSWORD` | dashboard login password | Used on first login when no saved password hash exists. |
+| `INITIAL_PASSWORD` | dashboard login password | Used on first login when no saved password hash exists. Falls back to upstream default `123456` when unset — log in with it, then change it in Dashboard → Profile/Settings. |
 
 Recommended:
 
@@ -254,7 +255,7 @@ for the full variable reference with per-var comments.
 
 ### Step 7 — Verify the deployment
 
-1. Open `https://<your-project>.vercel.app/login` → log in with `INITIAL_PASSWORD` → dashboard loads.
+1. Open `https://<your-project>.vercel.app/login` → log in with `INITIAL_PASSWORD` (or `123456` on a fresh deploy without it, then change it in Dashboard → Profile/Settings) → dashboard loads.
 2. Vercel Deployments → Logs: look for
    `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com`.
    If you see `better-sqlite3` or a placeholder warning instead, `DATABASE_URL` isn't applied — fix it and redeploy.
@@ -311,7 +312,8 @@ for the full variable reference with per-var comments.
 | Local Windows warning about Unix `DATA_DIR` | Linux-style `.env` copied to Windows | Unset `DATA_DIR` locally (auto-falls back to `%APPDATA%/9router`) |
 
 The full matrix plus the list of Vercel-specific code changes is in
-[`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md) §7–§8.
+[`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md) §7–§8
+(English) or [`DEPLOY_VERCEL_ID.md`](./DEPLOY_VERCEL_ID.md) §7–§8 (Bahasa Indonesia).
 
 ---
 
