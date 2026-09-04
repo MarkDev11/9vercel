@@ -92,3 +92,6 @@ _src/
 patch_clean.mjs
 .tmp/
 
+# Kiro local workspace state
+.kiro/
+

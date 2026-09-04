@@ -34,6 +34,9 @@ MenuItem.propTypes = {
 };
 
 export default function HeaderMenu({ onLogout }) {
+  // Fork note (Vercel): /api/version/shutdown returns 403 on serverless —
+  // hide the Shutdown item there instead of showing a dead button.
+  const IS_VERCEL_UI = process.env.NEXT_PUBLIC_IS_VERCEL === "1";
   const [isOpen, setIsOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [shutdownOpen, setShutdownOpen] = useState(false);
@@ -89,12 +92,14 @@ export default function HeaderMenu({ onLogout }) {
               label="Theme"
               onClick={() => { toggleTheme(); close(); }}
             />
-            <MenuItem
-              icon="power_settings_new"
-              label="Shutdown"
-              danger
-              onClick={() => { close(); setShutdownOpen(true); }}
-            />
+            {!IS_VERCEL_UI && (
+              <MenuItem
+                icon="power_settings_new"
+                label="Shutdown"
+                danger
+                onClick={() => { close(); setShutdownOpen(true); }}
+              />
+            )}
             <MenuItem
               icon="logout"
               label="Logout"

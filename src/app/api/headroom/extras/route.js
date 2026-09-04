@@ -22,6 +22,11 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
+  // Fork note (Vercel): pip-installing packages at request time is impossible
+  // on read-only serverless — refuse explicitly instead of spawning pip.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "Headroom extras install is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     const body = await req.json().catch(() => ({}));
     const requested = Array.isArray(body?.extras) ? body.extras : [];
@@ -34,6 +39,11 @@ export async function POST(req) {
 }
 
 export async function DELETE(req) {
+  // Fork note (Vercel): pip-uninstalling packages at request time is impossible
+  // on read-only serverless.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "Headroom extras removal is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     const body = await req.json().catch(() => ({}));
     const requested = Array.isArray(body?.extras) ? body.extras : [];
