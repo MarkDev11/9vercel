@@ -140,12 +140,15 @@ function isPublicLlmApi(pathname) {
 
 function extractApiKey(request) {
   const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
-  const apiKeyHeader = request.headers.get("x-api-key");
+  if (authHeader?.startsWith("Bearer ")) {
+    const key = authHeader.slice(7).trim();
+    if (key) return key;
+  }
+  const apiKeyHeader = request.headers.get("x-api-key")?.trim();
   if (apiKeyHeader) return apiKeyHeader;
-  const googleApiKeyHeader = request.headers.get("x-goog-api-key");
+  const googleApiKeyHeader = request.headers.get("x-goog-api-key")?.trim();
   if (googleApiKeyHeader) return googleApiKeyHeader;
-  return request.nextUrl.searchParams?.get("key") || null;
+  return request.nextUrl.searchParams?.get("key")?.trim() || null;
 }
 
 async function hasValidApiKey(request) {

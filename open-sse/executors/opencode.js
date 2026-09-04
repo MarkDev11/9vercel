@@ -80,6 +80,12 @@ export class OpenCodeExecutor extends BaseExecutor {
         if (body.max_completion_tokens !== undefined) body.max_output_tokens = body.max_completion_tokens;
         else if (body.max_tokens !== undefined) body.max_output_tokens = body.max_tokens;
       }
+      // Floor: muse-spark reasoning consumes the output budget, so a small
+      // client cap (e.g. max_tokens=200) starves text — upstream returns
+      // status incomplete (max_output_tokens) with empty content. 1024 leaves
+      // headroom for reasoning + a short visible answer.
+      const cap = Number(body.max_output_tokens);
+      if (!Number.isFinite(cap) || cap < 1024) body.max_output_tokens = 1024;
       delete body.max_tokens;
       delete body.max_completion_tokens;
       normalizeOpencodeReasoning(model, body);

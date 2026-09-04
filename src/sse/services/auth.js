@@ -343,14 +343,29 @@ export function extractApiKey(request) {
   // Check Authorization header first
   const authHeader = request.headers.get("Authorization");
   if (authHeader?.startsWith("Bearer ")) {
-    return authHeader.slice(7);
+    const key = authHeader.slice(7).trim();
+    if (key) return key;
   }
 
   // Check Anthropic x-api-key header
-  const xApiKey = request.headers.get("x-api-key");
+  const xApiKey = request.headers.get("x-api-key")?.trim();
   if (xApiKey) {
     return xApiKey;
   }
+
+  // Check Google x-goog-api-key header (parity with dashboardGuard)
+  const googleApiKey = request.headers.get("x-goog-api-key")?.trim();
+  if (googleApiKey) {
+    return googleApiKey;
+  }
+
+  // Check ?key= query param (parity with dashboardGuard)
+  try {
+    if (request?.url) {
+      const key = new URL(request.url).searchParams?.get("key")?.trim();
+      if (key) return key;
+    }
+  } catch { /* request without URL — ignore */ }
 
   return null;
 }
