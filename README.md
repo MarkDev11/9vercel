@@ -121,6 +121,200 @@ Default URLs:
 
 ---
 
+## Vercel + Supabase Deployment
+
+This fork runs on Vercel serverless with **Supabase Postgres** as its persistent database.
+Local dev (Laragon/Windows) needs zero config — it just uses SQLite. On Vercel you **must**
+set Supabase, because Vercel's filesystem is ephemeral (any SQLite file is wiped on every
+deploy/instance recycle).
+
+How it works: `src/lib/db/driver.js` auto-selects the database at boot — if `DATABASE_URL`
+(or `POSTGRES_URL` / `POSTGRES_URL_NON_POOLING` / `SUPABASE_DB_URL` / `SUPABASE_DATABASE_URL`) is set and is not a
+`[YOUR-PASSWORD]` placeholder, the app uses Supabase via the `postgres` (postgres.js) driver;
+otherwise it falls back to local SQLite. The `postgres` package is already in `dependencies`,
+and `next.config.mjs` automatically disables `output: standalone` when `VERCEL=1` is set.
+
+> Full walkthrough with screenshots-level detail, live project IDs, and the complete
+> troubleshooting matrix lives in [`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md).
+> Below is the condensed, keep-it-green path.
+
+### Prerequisites
+
+- A [Supabase](https://supabase.com) account (free tier is enough)
+- A [Vercel](https://vercel.com) account, ideally with this repo pushed to GitHub
+  (private repo works fine)
+- Your Supabase **database password** (set at project creation — save it; you'll need it
+  for the connection string). Forgot it? Supabase Dashboard → Project Settings →
+  Database → Reset database password.
+
+### Step 1 — Create a Supabase project
+
+1. Supabase Dashboard → New project → pick a name, a database password, and the region
+   closest to you. **Note the region** — the pooler hostname embeds it (e.g.
+   `aws-0-ap-northeast-1.pooler.supabase.com`). Never guess the hostname; always copy it
+   from your own dashboard.
+2. Wait for the project to finish provisioning.
+
+### Step 2 — Create the tables (run `supabase/schema.sql`)
+
+1. Supabase Dashboard → **SQL Editor → New query**.
+2. Copy-paste the entire contents of [`supabase/schema.sql`](./supabase/schema.sql) from
+   this repo → **Run**. It must succeed with no errors.
+3. The script is idempotent (`IF NOT EXISTS` everywhere) — safe to re-run.
+4. It creates 11 tables — `_meta`, `settings`, `providerConnections`, `providerNodes`,
+   `proxyPools`, `apiKeys`, `combos`, `kv`, `usageHistory`, `usageDaily`,
+   `requestDetails` — plus a seed row `settings(id=1)`.
+5. Verify: Supabase Dashboard → Table Editor → you should see the tables listed.
+
+> Fallback safety net: migration `001-initial` also auto-creates the schema at boot, so the
+> app can self-heal if this step was skipped — but running the SQL once manually is the
+> supported, verifiable path.
+
+### Step 3 — Copy the pooled `DATABASE_URL` (port 6543, not 5432)
+
+In Supabase Dashboard → **Project Settings → Database → Connection string → URI**:
+
+- For **Vercel/serverless you MUST use the Transaction Pooler** entry (port `6543` with
+  `?pgbouncer=true`). It looks like this (replace with your own values):
+
+  ```
+  postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true
+  ```
+
+  - User is `postgres.<ref>` (note the `.ref` suffix — plain `postgres` fails auth on the pooler).
+  - Replace `[YOUR-PASSWORD]` with the real database password (URL-encode special chars).
+- **Do NOT use the Direct connection** (`db.<ref>.supabase.co:5432`) on Vercel: it resolves
+  to IPv6 (`ENETUNREACH` during Vercel builds) and without pgbouncer a serverless fleet
+  quickly exhausts `max_connections` (`too many clients`).
+- For **local dev** either string works; the pooler `6543` string is verified to work locally too.
+
+The **publishable key** (`sb_publishable_...`) is NOT needed for the database — the DB goes
+through `DATABASE_URL` with postgres.js, not `@supabase/supabase-js`. Only set
+`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` if you later add client-side
+Supabase Auth features.
+
+### Step 4 — Generate the secrets
+
+```bash
+# JWT_SECRET — signs dashboard session cookies.
+# REQUIRED on Vercel: instances are stateless, so an auto-generated per-instance
+# secret would mint sessions that fail on the next instance (login loop).
+# The app fail-fasts at boot if JWT_SECRET is missing on Vercel.
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# CRON_SECRET — guards /api/cron/refresh-tokens (recommended for prod)
+openssl rand -hex 32
+
+# NINEROUTER_PEER_TOKEN — proves x-9r-real-ip headers are genuine for login
+# rate-limiting (optional; a Vercel-middleware fallback applies when unset)
+openssl rand -hex 24
+```
+
+### Step 5 — Deploy to Vercel
+
+**Option A — via GitHub (recommended):**
+
+1. Push this repo to GitHub (private is fine).
+2. Vercel Dashboard → Add New Project → Import the repo (framework preset: Next.js, auto-detected).
+3. Open Settings → Environment Variables and add the vars from the table below
+   (apply to Production + Preview).
+4. Deploy.
+
+**Option B — via CLI:**
+
+```bash
+npm i -g vercel
+vercel          # first-time linking
+vercel env add DATABASE_URL      # paste the 6543 pooler string
+vercel env add JWT_SECRET
+vercel env add INITIAL_PASSWORD
+vercel env add CRON_SECRET       # optional but recommended
+vercel --prod   # deploy (redeploy after adding env vars so they take effect)
+```
+
+### Step 6 — Environment variables on Vercel
+
+Required:
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooler 6543 + `?pgbouncer=true`, user `postgres.<ref>`. `POSTGRES_URL` also accepted. If unset or still `[YOUR-PASSWORD]`, the app logs a placeholder warning and falls back to SQLite (data will NOT persist). |
+| `JWT_SECRET` | long random (≥32 chars) | Mandatory on Vercel — boot throws without it. |
+| `INITIAL_PASSWORD` | dashboard login password | Used on first login when no saved password hash exists. |
+
+Recommended:
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `CRON_SECRET` | random hex 32 | Secures the daily OAuth token-refresh cron. |
+| `NINEROUTER_PEER_TOKEN` | random hex 24+ | Authenticates real-IP stamping for login rate-limit. |
+
+Do NOT set `DATA_DIR` on Vercel (self-host/local only). See [`.env.example`](./.env.example)
+for the full variable reference with per-var comments.
+
+### Step 7 — Verify the deployment
+
+1. Open `https://<your-project>.vercel.app/login` → log in with `INITIAL_PASSWORD` → dashboard loads.
+2. Vercel Deployments → Logs: look for
+   `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com`.
+   If you see `better-sqlite3` or a placeholder warning instead, `DATABASE_URL` isn't applied — fix it and redeploy.
+3. Health + auth smoke test:
+   ```bash
+   curl https://<your-project>.vercel.app/api/health
+   curl -X POST https://<your-project>.vercel.app/api/auth/login \
+     -H 'Content-Type: application/json' -d '{"password":"<INITIAL_PASSWORD>"}'
+   ```
+4. Persistence test (proves you're on Supabase, not ephemeral SQLite):
+   `POST /api/combos` then `GET /api/combos` — the combo must survive a redeploy.
+   Or check Supabase Dashboard → Table Editor → rows appear in `providerConnections`/`combos`.
+5. Gateway smoke test (create an API key in Dashboard → Keys first):
+   ```bash
+   curl https://<your-project>.vercel.app/v1/models \
+     -H "Authorization: Bearer <api-key>"
+   curl https://<your-project>.vercel.app/v1/chat/completions \
+     -H "Authorization: Bearer <api-key>" -H 'Content-Type: application/json' \
+     -d '{"model":"<combo-or-provider-model>","messages":[{"role":"user","content":"ping"}]}'
+   ```
+6. Cron check (after setting `CRON_SECRET`):
+   ```bash
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://<your-project>.vercel.app/api/cron/refresh-tokens
+   # expect: {"ok":true,...}
+   curl https://<your-project>.vercel.app/api/cron/refresh-tokens
+   # expect: 401 (unauthenticated cron calls are rejected)
+   ```
+
+### Cron (OAuth token refresh) on Vercel
+
+- `vercel.json` schedules `GET /api/cron/refresh-tokens` daily (`0 0 * * *` — Hobby plans
+  only allow daily; sub-hourly schedules need Pro). It refreshes OAuth tokens expiring
+  within 30 minutes via `runBackgroundTokenRefreshTick()`, `maxDuration: 60`, fail-open.
+- Auth: send `Authorization: Bearer <CRON_SECRET>` (or `x-cron-secret`). Vercel Cron
+  attaches the Bearer token automatically when the secret is configured.
+- `src/dashboardGuard.js` lists this path in `PUBLIC_API_PATHS` so the guard doesn't 401
+  the request before the handler can check `CRON_SECRET`.
+- Locally/self-hosted no cron is needed — `custom-server.js` + `initializeApp` run the same
+  refresh on a 5-minute interval (skipped when `VERCEL=1`).
+
+### Vercel troubleshooting (short version)
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Log: `DATABASE_URL contains placeholder` | Env still has `[YOUR-PASSWORD]` | Paste the real password, redeploy |
+| `password authentication failed` | Wrong password, or pooler user missing `.<ref>` suffix | Use `postgres.<ref>`; reset DB password in Supabase if lost |
+| `ENOTFOUND ...pooler.supabase.com` | Pooler region doesn't match your project | Copy the exact host from Project Settings → Database |
+| `ENETUNREACH db.<ref>.supabase.co:5432` in build | Direct 5432 doesn't work on serverless IPv6 | Switch to the `6543?pgbouncer=true` pooler string |
+| `too many clients` / `max_connections` | Port 5432 without pgbouncer | Same fix: Transaction pooler 6543 |
+| Cron always 401 with correct `CRON_SECRET` | Old build predating the `dashboardGuard` fix | Redeploy latest; retest with the Bearer curl above |
+| Cron never runs | Non-daily schedule on Hobby | Keep `0 0 * * *` (daily); sub-daily needs Pro |
+| Login loops / sessions invalid across instances | `JWT_SECRET` missing or different per instance | Set one stable `JWT_SECRET` on Vercel |
+| Local Windows warning about Unix `DATA_DIR` | Linux-style `.env` copied to Windows | Unset `DATA_DIR` locally (auto-falls back to `%APPDATA%/9router`) |
+
+The full matrix plus the list of Vercel-specific code changes is in
+[`DEPLOY_VERCEL.md`](./DEPLOY_VERCEL.md) §7–§8.
+
+---
+
 ## Video Guides
 
 <div align="center">
@@ -681,7 +875,8 @@ Seamless translation between formats:
 
 ### 🌐 Deploy Anywhere
 
-- 💻 **Localhost** - Default, works offline
+- 💻 **Localhost** - Default, works offline (SQLite, zero config)
+- ▲ **Vercel + Supabase** - Serverless, persistent Postgres DB — see [Vercel + Supabase Deployment](#vercel--supabase-deployment) below
 - ☁️ **VPS/Cloud** - Share across devices
 - 🐳 **Docker** - One-command deployment
 - 🚀 **Cloudflare Workers** - Global edge network
@@ -1284,11 +1479,14 @@ docker pull decolua/9router:latest   # update to latest
 
 ### Environment Variables
 
-| Variable                                             | Default                                  | Description                                                                         |
-| ---------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| `JWT_SECRET`                                         | Auto-generated (`~/.9router/jwt-secret`) | JWT signing secret for dashboard auth cookie (override to share across instances)   |
-| `INITIAL_PASSWORD`                                   | `123456`                                 | First login password when no saved hash exists                                      |
-| `DATA_DIR`                                           | `~/.9router`                             | Main app data location (SQLite at `$DATA_DIR/db/data.sqlite`)                       |
+| Variable                                             | Default                                              | Description                                                                                                  |
+| ---------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                                       | empty (→ local SQLite)                               | Supabase Postgres connection string. **Required on Vercel** (use the `6543?pgbouncer=true` Transaction Pooler string); aliases `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `SUPABASE_DB_URL`, `SUPABASE_DATABASE_URL` also accepted. Placeholder `[YOUR-PASSWORD]` values are ignored (SQLite fallback). See [Vercel + Supabase Deployment](#vercel--supabase-deployment). |
+| `JWT_SECRET`                                         | Auto-generated (`~/.9router/jwt-secret`) locally; **required on Vercel** (boot throws if missing) | JWT signing secret for dashboard auth cookie. Must be one stable value across all Vercel instances, otherwise sessions fail from one request to the next. |
+| `INITIAL_PASSWORD`                                   | `123456`                                             | First login password when no saved hash exists                                      |
+| `CRON_SECRET`                                        | empty (cron unauthenticated)                         | Bearer secret for `/api/cron/refresh-tokens` — set on Vercel to secure the daily OAuth refresh. |
+| `NINEROUTER_PEER_TOKEN`                              | empty (Vercel-middleware fallback)                   | Proves `x-9r-real-ip` headers are genuine for login rate-limiting. |
+| `DATA_DIR`                                           | `~/.9router`                                         | Main app data location (**self-host/local only** — SQLite at `$DATA_DIR/db/data.sqlite`). Do NOT set on Vercel. |
 | `PORT`                                               | framework default                        | Service port (`20128` in examples)                                                  |
 | `HOSTNAME`                                           | framework default                        | Bind host (Docker defaults to `0.0.0.0`)                                            |
 | `NODE_ENV`                                           | runtime default                          | Set `production` for deploy                                                         |
@@ -1313,7 +1511,8 @@ Notes:
 
 ### Runtime Files and Storage
 
-- Main app state: `${DATA_DIR}/db/data.sqlite` (SQLite — providers, combos, aliases, keys, settings, usage history)
+- Main app state: Supabase Postgres when `DATABASE_URL` is set (Vercel), otherwise
+  `${DATA_DIR}/db/data.sqlite` (SQLite — providers, combos, aliases, keys, settings, usage history)
 - Auto backups: `${DATA_DIR}/db/backups/`
 - Optional request/translator logs: `<repo>/logs/...` when `ENABLE_REQUEST_LOGS=true`
 - Both `${DATA_DIR}` and `~/.9router` resolve to the same location in a Docker container — the symlink `/root/.9router -> /app/data` is created at build time.
@@ -1443,7 +1642,7 @@ Notes:
 - **Runtime**: Node.js 20+
 - **Framework**: Next.js 16
 - **UI**: React 19 + Tailwind CSS 4
-- **Database**: SQLite (better-sqlite3 / node:sqlite / sql.js fallback)
+- **Database**: Supabase Postgres (`postgres`/postgres.js via `DATABASE_URL`) on Vercel; SQLite (better-sqlite3 / node:sqlite / sql.js fallback) locally
 - **Streaming**: Server-Sent Events (SSE)
 - **Auth**: OAuth 2.0 (PKCE) + JWT + API Keys
 
