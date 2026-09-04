@@ -10,6 +10,12 @@ export const maxDuration = 300;
 // "Start" in library mode = warm the in-process transform module.
 // Auto-installs first when the package is missing and pxpipeAutoInstall is on.
 export async function POST() {
+  // Fork note (Vercel): the package can never be installed on serverless
+  // (install route is 403, /tmp is ephemeral) and auto-install would spawn
+  // npm into a read-only FS — refuse explicitly like the install route.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "PXPIPE is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     if (!getInstallInfo().installed) {
       const settings = await getSettings();
