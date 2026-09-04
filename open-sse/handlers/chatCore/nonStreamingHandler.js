@@ -5,7 +5,7 @@ import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.j
 import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTracking.js";
 import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
-import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
+import { parseSSEToOpenAIResponse, handleForcedSSEToJson } from "./sseToJsonHandler.js";
 import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
@@ -153,6 +153,31 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
   }
   if (targetFormat === FORMATS.OPENAI) return responseBody;
 
+  // Responses-API upstream answered with a full JSON response body while the
+  // client speaks Chat Completions (opencode muse-spark non-streaming): pick
+  // the assistant message + usage into a chat.completion shape instead of
+  // returning the raw Responses body (no `choices` → empty content at best).
+  // Last non-empty message item wins — early blocks are often empty.
+  if (targetFormat === FORMATS.OPENAI_RESPONSES && sourceFormat === FORMATS.OPENAI) {
+    let textContent = "";
+    for (const item of responseBody?.output || []) {
+      if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+      const text = item.content.map((c) => (typeof c?.text === "string" ? c.text : "")).filter(Boolean).join("");
+      if (text) textContent = text;
+    }
+    const respUsage = responseBody?.usage || {};
+    const inTokens = respUsage.input_tokens || 0;
+    const outTokens = respUsage.output_tokens || 0;
+    return {
+      id: responseBody.id ? String(responseBody.id).replace(/^resp_/, "chatcmpl-") : `chatcmpl-${Date.now()}`,
+      object: "chat.completion",
+      created: responseBody.created_at || Math.floor(Date.now() / 1000),
+      model: responseBody.model || "unknown",
+      choices: [{ index: 0, message: { role: "assistant", content: textContent || "" }, finish_reason: responseBody.status === "completed" ? "stop" : (responseBody.status || "stop") }],
+      usage: { prompt_tokens: inTokens, completion_tokens: outTokens, total_tokens: inTokens + outTokens },
+    };
+  }
+
   // Gemini / Antigravity
   if (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY || targetFormat === FORMATS.GEMINI_CLI || targetFormat === FORMATS.VERTEX) {
     const response = responseBody.response || responseBody;
@@ -287,6 +312,17 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   let responseBody;
 
   if (contentType.includes("text/event-stream")) {
+    // A Responses-API upstream (e.g. opencode muse-spark) emits Responses SSE
+    // (response.output_text.delta / response.completed), which the Chat-shaped
+    // parseSSEToOpenAIResponse cannot read — it would return an empty stop with
+    // no usage. Route on the UPSTREAM format so those bodies go through the
+    // Responses converter that understands them.
+    if (targetFormat === FORMATS.OPENAI_RESPONSES) {
+      const forced = await handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, reqTag, log });
+      if (forced) return forced;
+      appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+    }
     const sseText = await providerResponse.text();
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) {

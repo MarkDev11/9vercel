@@ -23,7 +23,7 @@ function textFromResponsesMessageItem(item) {
  * Codex / Responses API may emit many alternating reasoning + message items.
  * Early message blocks often have empty output_text; the user-visible answer is usually in the last non-empty message.
  */
-function pickAssistantMessageForChatCompletion(output) {
+export function pickAssistantMessageForChatCompletion(output) {
   if (!Array.isArray(output)) return { msgItem: null, textContent: null };
   const messages = output.filter((item) => item?.type === "message");
   if (messages.length === 0) return { msgItem: null, textContent: null };
@@ -179,10 +179,18 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
+  if (reqLogger?.logProviderResponse) {
+    try {
+      // The body stream can only be consumed once — clone before converting.
+      const clone = typeof providerResponse.clone === "function" ? providerResponse.clone() : null;
+      const preview = clone ? (await clone.text().catch(() => "")).slice(0, 4000) : "";
+      reqLogger.logProviderResponse(providerResponse.status, providerResponse.statusText, providerResponse.headers, preview);
+    } catch { /* logging must not break the conversion */ }
+  }
 
   trackDone();
 
