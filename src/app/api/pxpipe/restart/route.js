@@ -7,6 +7,11 @@ export const dynamic = "force-dynamic";
 
 // Reload the in-process module (picks up an upgraded install without a server restart).
 export async function POST() {
+  // Fork note (Vercel): same as start/install — the package can never exist
+  // on serverless, so refuse explicitly instead of reporting NOT_INSTALLED.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "PXPIPE is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     // Mirror the start route: restarting without an install is NOT_INSTALLED (409),
     // not a server error — on Vercel /tmp is ephemeral so this is the common case.
