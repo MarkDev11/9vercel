@@ -8,9 +8,8 @@
 ## 1) Supabase — sekali setup
 
 ### A. Buat / buka project
-- Project live: **https://ymafcaqkinafioylcfyt.supabase.co** (`ref` = `ymafcaqkinafioylcfyt`)
-- Project lama (referensi docs awal): `gnzojhgjguzimtpolrlq` — sudah tidak dipakai, diganti `ymaf...`.
-- Region pooler live: **ap-northeast-1** (ditentukan Supabase saat create project — region lain akan `ENOTFOUND`).
+1. Supabase Dashboard → New project → beri nama, set database password, pilih region terdekat.
+2. Catat **project ref** (bagian `<ref>.supabase.co` dari Project URL) dan **region** — hostname pooler mengikuti region project kamu (mis. `aws-0-ap-northeast-1.pooler.supabase.com`). Jangan tebak hostname — selalu copy dari dashboard project kamu sendiri.
 
 ### B. Jalankan schema SQL
 1. Buka **Supabase Dashboard → SQL Editor → New query**
@@ -26,11 +25,11 @@ Di **Project Settings → Database → Connection string → URI**:
 
 - **Untuk Vercel / serverless — WAJIB pakai Transaction Pooler (port 6543):**
   ```
-  postgresql://postgres.ymafcaqkinafioylcfyt:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+  postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true
   ```
-  Copy yang labelnya **Transaction pooler** (atau **Session pooler / 6543**). Jangan pakai yang `db.<ref>.supabase.co:5432` untuk Vercel — direct sering `ENETUNREACH` IPv6 di build Vercel dan tanpa pgbouncer cepat `too many clients`.
+  Copy yang labelnya **Transaction pooler** (atau **Session pooler / 6543**) dari dashboard project kamu. Jangan pakai yang `db.<ref>.supabase.co:5432` untuk Vercel — direct sering `ENETUNREACH` IPv6 di build Vercel dan tanpa pgbouncer cepat `too many clients`.
 
-  > Region `ap-northeast-1` spesifik untuk project `ymaf...`. Jika project kamu di region lain, host pooler ikut region itu (mis. `aws-0-ap-southeast-1`, `aws-0-us-east-1`). Selalu copy dari dashboard, jangan tebak.
+  > Host pooler mengikuti region project kamu (mis. `aws-0-ap-southeast-1`, `aws-0-us-east-1`). Selalu copy dari dashboard, jangan tebak.
 
 - **Untuk lokal/dev** boleh pakai direct `5432` juga jalan, tapi `6543?pgbouncer=true` juga boleh dan sudah diverifikasi.
 
@@ -38,12 +37,12 @@ Di **Project Settings → Database → Connection string → URI**:
 > Lupa password? **Project Settings → Database → Reset database password**.
 
 ### D. Publishable key — tidak wajib untuk DB
-`sb_publishable_e15rFgeaC0oDTEKV4pi--A_1E99dcNy` (live) dan `sb_secret_...` itu untuk Supabase Auth / PostgREST client.
+Publishable key (`sb_publishable_...`) dan secret key (`sb_secret_...`, Project Settings → API Keys) itu untuk Supabase Auth / PostgREST client.
 **9vercel tidak memakainya untuk DB** — DB lewat `DATABASE_URL` (driver `postgres` / `postgres.js`), bukan `@supabase/supabase-js`. Jadi kalau cuma deploy DB, cukup `DATABASE_URL` saja.
-Jika nanti pakai fitur Supabase Auth client-side, baru set:
+Jika nanti pakai fitur Supabase Auth client-side, baru set (copy dari dashboard project kamu):
 ```
-NEXT_PUBLIC_SUPABASE_URL=https://ymafcaqkinafioylcfyt.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_e15rFgeaC0oDTEKV4pi--A_1E99dcNy
+NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
 ```
 
 ---
@@ -53,11 +52,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_e15rFgeaC0oDTEKV4pi--A_1E99dcNy
 ### Lokal (`C:\laragon\www\9vercel\.env` atau `.env.local`)
 ```env
 # Kosongkan DATABASE_URL → otomatis pakai SQLite (file di %APPDATA%/9router)
-# Atau isi kalau mau test Supabase dari lokal:
-DATABASE_URL=postgresql://postgres.ymafcaqkinafioylcfyt:REALPASSWORD@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+# Atau isi kalau mau test Supabase dari lokal (copy Transaction pooler dari dashboard):
+DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true
 
 JWT_SECRET=ganti-min-32-char-random
-INITIAL_PASSWORD=admin123
+INITIAL_PASSWORD=ganti-dengan-password-dashboard
 ```
 Jika `DATABASE_URL` kosong atau masih `[YOUR-PASSWORD]`, app akan log:
 `[DB] DATABASE_URL contains placeholder — skipping Supabase, falling back to SQLite` dan tetap jalan.
@@ -67,9 +66,9 @@ Wajib:
 
 | Key | Nilai | Catatan |
 |-----|-------|---------|
-| `DATABASE_URL` | `postgresql://postgres.ymafcaqkinafioylcfyt:REALPASSWORD@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooling 6543 + `?pgbouncer=true`, user `postgres.<ref>`. Alias `POSTGRES_URL` juga didukung. |
+| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true` | Pooling 6543 + `?pgbouncer=true`, user `postgres.<ref>` (copy Transaction pooler dari dashboard). Alias `POSTGRES_URL` juga didukung. |
 | `JWT_SECRET` | random panjang (≥32 char) | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `INITIAL_PASSWORD` | password login dashboard | `Admin123!` di deploy live saat ini |
+| `INITIAL_PASSWORD` | password login dashboard | Password yang kamu set sendiri (dipakai saat login pertama, sebelum password tersimpan di DB) |
 
 Opsional tapi disarankan:
 
@@ -99,7 +98,7 @@ npm i -g vercel
 cd C:/laragon/www/9vercel
 vercel          # linking pertama kali
 vercel --prod   # deploy production
-vercel env add DATABASE_URL   # lalu paste value pooling 6543 ap-northeast-1
+vercel env add DATABASE_URL   # lalu paste value Transaction pooler 6543 dari dashboard
 vercel env add JWT_SECRET
 vercel env add INITIAL_PASSWORD
 vercel --prod   # redeploy agar env kepakai
@@ -108,7 +107,7 @@ vercel --prod   # redeploy agar env kepakai
 ### Build
 - Lokal test: `npm run build` (sudah verified — compiled successfully, 137 pages, postbuild copy standalone).
 - Vercel build juga `npm run build`; `next.config.mjs` otomatis non-aktifkan `output: standalone` saat `VERCEL=1` supaya tidak bentrok dengan Vercel tracing. Verified: `VERCEL=1 npm run build` sukses, `No standalone build found` (expected).
-- **Pooler di build:** log `[DB] Driver: supabase-postgres | host: aws-0-ap-northeast-1.pooler.supabase.com` menandakan env kepakai. Jika masih `better-sqlite3` atau `ENETUNREACH db.<ref>.supabase.co:5432`, cek `DATABASE_URL` masih direct — ganti ke pooler 6543.
+- **Pooler di build:** log `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` menandakan env kepakai. Jika masih `better-sqlite3` atau `ENETUNREACH db.<ref>.supabase.co:5432`, cek `DATABASE_URL` masih direct — ganti ke pooler 6543.
 
 ---
 
@@ -143,16 +142,15 @@ Tidak perlu set `TRUST_PROXY`.
 
 ## 6) Verifikasi setelah deploy
 
-1. Buka `https://<project>.vercel.app/login` → login pakai `INITIAL_PASSWORD` (`Admin123!`) → harus masuk dashboard.
-2. Cek log Vercel (Deployments → Logs): harus ada `[DB] Driver: supabase-postgres | host: aws-0-ap-northeast-1.pooler.supabase.com` (bukan `better-sqlite3`). Jika masih `better-sqlite3`, berarti `DATABASE_URL` belum kepakai / masih placeholder.
+1. Buka `https://<project>.vercel.app/login` → login pakai `INITIAL_PASSWORD` yang kamu set → harus masuk dashboard.
+2. Cek log Vercel (Deployments → Logs): harus ada `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com` (bukan `better-sqlite3`). Jika masih `better-sqlite3`, berarti `DATABASE_URL` belum kepakai / masih placeholder.
 3. Test API: `curl https://<project>.vercel.app/api/health` dan `POST /api/auth/login`.
 4. Manual trigger cron (wajib pakai secret setelah fix dashboardGuard): `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/cron/refresh-tokens` → `{"ok":true,...}`
 5. Di Supabase Dashboard → Table Editor → cek `providerConnections`, `settings`, dll terisi setelah kamu tambah provider. Test write: `POST /api/combos` lalu `GET /api/combos` harus persist (pooler Supabase, bukan SQLite ephemeral).
 
-Live saat ini:
-- Vercel: `https://9vercel-five.vercel.app` (alias) — `dpl_9F68ZRXK2tKPrkXcVZ6BQQkLdhcp` READY, pooler `ap-northeast-1:6543?pgbouncer=true`
-- Supabase: `https://ymafcaqkinafioylcfyt.supabase.co`
-- Vercel project: `prj_FceJ7eeNQ0VsVrXfhXODeWopioR6` / team `team_Q8bAw2rf7vFe7a4TJHMQtzPz`
+Contoh hasil yang benar:
+- Log menampilkan `[DB] Driver: supabase-postgres | host: aws-0-<region>.pooler.supabase.com`
+- Supabase Dashboard → Table Editor → tabel `providerConnections`, `combos`, dll terisi setelah kamu tambah data
 
 ---
 
@@ -162,7 +160,7 @@ Live saat ini:
 |--------|----------|-----|
 | Build sukses tapi log `[DB] DATABASE_URL contains placeholder` | Env masih `[YOUR-PASSWORD]` | Ganti dengan password real, redeploy |
 | `password authentication failed` | Password salah / user salah (`postgres` bukan `postgres.<ref>` untuk pooler) | Untuk pooler pakai `postgres.<ref>`; reset password di Supabase |
-| `ENOTFOUND aws-0-...pooler.supabase.com` | Region pooler salah | Cek region project di dashboard; untuk `ymaf...` harus `ap-northeast-1` |
+| `ENOTFOUND aws-0-...pooler.supabase.com` | Region pooler salah | Copy host pooler yang tepat dari Project Settings → Database project kamu |
 | `ENETUNREACH db.<ref>.supabase.co:5432` di build Vercel | Pakai direct 5432 di serverless (IPv6) | Ganti ke `6543?pgbouncer=true` pooler |
 | `too many clients` / `max_connections` | Pakai port 5432 tanpa pgbouncer di serverless | Ganti ke `6543?pgbouncer=true` (Transaction pooler) |
 | Cron selalu 401 walau `CRON_SECRET` benar | `dashboardGuard` block sebelum handler (bug lama) | Sudah fix di `7fecc90` — pastikan deploy terbaru; lalu test `curl -H "Authorization: Bearer $CRON_SECRET" /api/cron/refresh-tokens` |

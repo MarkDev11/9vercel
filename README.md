@@ -151,7 +151,7 @@ and `next.config.mjs` automatically disables `output: standalone` when `VERCEL=1
 
 1. Supabase Dashboard → New project → pick a name, a database password, and the region
    closest to you. **Note the region** — the pooler hostname embeds it (e.g.
-   `aws-0-ap-northeast-1.pooler.supabase.com`). Never guess the hostname; always copy it
+   `aws-0-<region>.pooler.supabase.com`). Never guess the hostname; always copy it
    from your own dashboard.
 2. Wait for the project to finish provisioning.
 

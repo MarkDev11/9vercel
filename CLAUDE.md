@@ -83,7 +83,7 @@ State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with a
 - `src/lib/localDb.js` is a **backward-compat shim** re-exporting `src/lib/db/index.js`. New code should import from `@/lib/db/index.js`; per-entity logic lives in `src/lib/db/repos/*`. Schema/migrations in `src/lib/db/migrations/`.
 - DB file location resolves via `src/lib/db/paths.js` (`DATA_DIR`, else `~/.9router/`).
 - Usage/logs (`src/lib/usageDb.js`, `usage.json` + `log.txt`) still live under `~/.9router` and do **not** follow `DATA_DIR`.
-- Vercel deploy contract (see `DEPLOY_VERCEL.md`): `DATABASE_URL` must be the Supabase **Transaction Pooler** (`:6543?pgbouncer=true`, user `postgres.<ref>`, live host `aws-0-ap-northeast-1.pooler.supabase.com`) — direct `:5432` hits IPv6 `ENETUNREACH` on serverless. Live project `ymafcaqkinafioylcfyt.supabase.co`, Vercel app `https://9vercel-five.vercel.app`.
+- Vercel deploy contract (see `DEPLOY_VERCEL.md`): `DATABASE_URL` must be the Supabase **Transaction Pooler** (`:6543?pgbouncer=true`, user `postgres.<ref>`, host copied from the project's own dashboard) — direct `:5432` hits IPv6 `ENETUNREACH` on serverless. NOTE: never commit live project refs, hosts, URLs, passwords, or keys to the repo — docs use `<ref>`/`<region>` placeholders.
 
 ### RTK token saver (`open-sse/rtk/`)
 Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
