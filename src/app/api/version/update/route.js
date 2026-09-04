@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { killAppProcesses, spawnUpdaterAndExit } from "@/lib/appUpdater";
 
 export async function POST() {
+  // Fork note (Vercel): detached updater + process.exit makes no sense on
+  // serverless — refuse explicitly instead of killing/recycling a shared worker.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ success: false, message: "Update is not available on Vercel (redeploy instead)" }, { status: 403 });
+  }
   if (process.env.NODE_ENV !== "production") {
     return NextResponse.json(
       { success: false, message: "Update is only available in production build (9router CLI)" },

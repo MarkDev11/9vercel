@@ -6,6 +6,11 @@ import { configureTunnelMonitoring } from "@/shared/services/initializeApp";
 const DNS_WARMUP_DELAY_MS = 8000;
 
 export async function POST() {
+  // Fork note (Vercel): spawning cloudflared/tailscaled daemons is impossible
+  // on serverless — refuse explicitly instead of downloading/spawning binaries.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "Tunnel is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     const result = await enableTunnel();
     getSettings()

@@ -15,6 +15,11 @@ function parsePortFromUrl(url) {
 }
 
 export async function POST() {
+  // Fork note (Vercel): spawning a local child-process proxy is impossible on
+  // serverless — refuse explicitly instead of calling spawn() on Vercel.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "Headroom proxy cannot run on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     const settings = await getSettings();
     const url = settings.headroomUrl || DEFAULT_HEADROOM_URL;

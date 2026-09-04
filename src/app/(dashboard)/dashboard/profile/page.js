@@ -20,6 +20,9 @@ function getLocaleFromCookie() {
 }
 
 export default function ProfilePage() {
+  // Fork note (Vercel): /api/version/shutdown returns 403 on serverless —
+  // hide the Shutdown button there instead of showing a dead control.
+  const IS_VERCEL_UI = process.env.NEXT_PUBLIC_IS_VERCEL === "1";
   const { theme, setTheme, isDark } = useTheme();
   const [locale, setLocale] = useState(() => getLocaleFromCookie());
   const [langOpen, setLangOpen] = useState(false);
@@ -1617,15 +1620,17 @@ export default function ProfilePage() {
 
         {/* Account actions */}
         <div className="flex flex-col sm:flex-row gap-2">
-          <Button
-            variant="outline"
-            fullWidth
-            icon="power_settings_new"
-            onClick={() => setShutdownOpen(true)}
-            className="text-red-500 border-red-200 hover:bg-red-50 hover:border-red-300"
-          >
-            Shutdown
-          </Button>
+          {!IS_VERCEL_UI && (
+            <Button
+              variant="outline"
+              fullWidth
+              icon="power_settings_new"
+              onClick={() => setShutdownOpen(true)}
+              className="text-red-500 border-red-200 hover:bg-red-50 hover:border-red-300"
+            >
+              Shutdown
+            </Button>
+          )}
           <Button
             variant="outline"
             fullWidth

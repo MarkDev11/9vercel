@@ -35,7 +35,11 @@ const nextConfig = {
   images: {
     unoptimized: true
   },
-  env: {},
+  env: {
+    // Fork note (Vercel): build-time flag so client UI can hide host-only
+    // actions (shutdown, manual npm update) on serverless deployments.
+    NEXT_PUBLIC_IS_VERCEL: IS_VERCEL ? "1" : "",
+  },
   experimental: {
     // #1529/#1572: LLM clients can send long context or base64 image payloads through /v1 rewrites.
     proxyClientMaxBodySize,

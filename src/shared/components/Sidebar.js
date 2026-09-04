@@ -52,6 +52,9 @@ export default function Sidebar({ onClose }) {
   const { copied, copy } = useCopyToClipboard(2000);
 
   const INSTALL_CMD = UPDATER_CONFIG.installCmdLatest;
+  // Fork note (Vercel): the npm-install + shutdown update flow requires a host
+  // process — hide the banner on serverless where the routes return 403.
+  const IS_VERCEL_UI = process.env.NEXT_PUBLIC_IS_VERCEL === "1";
 
   useEffect(() => {
     fetch("/api/settings")
@@ -60,13 +63,14 @@ export default function Sidebar({ onClose }) {
       .catch(() => {});
   }, []);
 
-  // Lazy check for new npm version on mount
+  // Lazy check for new npm version on mount (skip on Vercel — no host updater)
   useEffect(() => {
+    if (IS_VERCEL_UI) return;
     fetch("/api/version")
       .then(res => res.json())
       .then(data => { if (data.hasUpdate) setUpdateInfo(data); })
       .catch(() => {});
-  }, []);
+  }, [IS_VERCEL_UI]);
 
   const isActive = (href) => {
     if (href === "/dashboard/endpoint") {
@@ -130,7 +134,7 @@ export default function Sidebar({ onClose }) {
               <span className="text-xs text-text-muted">v{APP_CONFIG.version}</span>
             </div>
           </Link>
-          {updateInfo && (
+          {!IS_VERCEL_UI && updateInfo && (
             <div className="flex flex-col gap-1.5 rounded p-1 -m-1">
               <span className="text-xs font-semibold text-green-600 dark:text-amber-500">
                 ↑ New version available: v{updateInfo.latestVersion}

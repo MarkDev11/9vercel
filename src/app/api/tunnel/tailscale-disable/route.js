@@ -4,6 +4,10 @@ import { getSettings } from "@/lib/localDb";
 import { configureTunnelMonitoring } from "@/shared/services/initializeApp";
 
 export async function POST() {
+  // Fork note (Vercel): no tailscaled daemon can exist on serverless.
+  if (process.env.VERCEL) {
+    return NextResponse.json({ error: "Tailscale is not available on Vercel (serverless)" }, { status: 403 });
+  }
   try {
     const result = await disableTailscale();
     getSettings()
