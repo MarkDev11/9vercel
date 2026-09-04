@@ -260,6 +260,24 @@ describe("DB SQLite layer — public API parity", () => {
     expect((await sqliteDb.getModelAliases()).marker).toBe("before");
   });
 
+  it("exportDb / importDb roundtrip preserves disabledModels", async () => {
+    await sqliteDb.disableModels("openai", ["gpt-4", "gpt-3.5-turbo"]);
+    const snap = await sqliteDb.exportDb();
+    expect(snap.disabledModels?.openai).toEqual(["gpt-4", "gpt-3.5-turbo"]);
+
+    // Import a payload without disabled entries must wipe them
+    const bare = { ...snap, disabledModels: {} };
+    await sqliteDb.importDb(bare);
+    expect(await sqliteDb.getDisabledByProvider("openai")).toEqual([]);
+
+    // Restore the snapshot: disabled entries come back
+    await sqliteDb.importDb(snap);
+    expect(await sqliteDb.getDisabledByProvider("openai")).toEqual(["gpt-4", "gpt-3.5-turbo"]);
+
+    // Cleanup so other tests see a clean slate
+    await sqliteDb.importDb({ ...snap, disabledModels: {} });
+  });
+
   it("pricing: user pricing merged with constants", async () => {
     await sqliteDb.updatePricing({ openai: { "gpt-test": { input: 1, output: 2 } } });
     const p = await sqliteDb.getPricing();
