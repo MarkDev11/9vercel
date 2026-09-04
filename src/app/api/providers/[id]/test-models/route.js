@@ -24,7 +24,11 @@ export async function POST(request, { params }) {
 
     let models = getProviderModels(alias);
 
-    const baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
+    // Fork note (Vercel): loopback is dead on serverless (see /api/models/test)
+    // — probe through the public app URL instead. Local keeps loopback.
+    const baseUrl = process.env.VERCEL
+      ? new URL(request.url).origin
+      : `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
 
     // Compatible providers: fetch live model list
     if (isCompatible && models.length === 0) {

@@ -50,18 +50,35 @@ async function getInternalHeaders() {
   return headers;
 }
 
+// Fork note (Vercel): the default baseUrl is loopback, which is dead on
+// serverless — fetch throws ("fetch failed") instead of returning a response.
+// A probe failure is an expected result, not a server error, so it must return
+// { ok:false } rather than throw (the route turns a throw into a 500).
+async function postProbe(url, init, start, timeoutMs = 15000) {
+  try {
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    return { res, latencyMs: Date.now() - start, fetchError: null };
+  } catch (e) {
+    return { res: null, latencyMs: Date.now() - start, fetchError: e };
+  }
+}
+
+function networkFailure(latencyMs, e) {
+  const detail = e?.cause?.message || e?.message || String(e);
+  return { ok: false, latencyMs, status: null, error: `Probe request failed: ${String(detail).slice(0, 240)}` };
+}
+
 export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
   const headers = await getInternalHeaders();
   const start = Date.now();
 
   if (kind === "embedding") {
-    const res = await fetch(`${baseUrl}/api/v1/embeddings`, {
+    const { res, latencyMs, fetchError } = await postProbe(`${baseUrl}/api/v1/embeddings`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model, input: "test" }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const latencyMs = Date.now() - start;
+    }, start);
+    if (fetchError) return networkFailure(latencyMs, fetchError);
     const rawText = await res.text().catch(() => "");
     let parsed = null;
     try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
@@ -78,13 +95,12 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
   }
 
   if (kind === "image") {
-    const res = await fetch(`${baseUrl}/api/v1/images/generations`, {
+    const { res, latencyMs, fetchError } = await postProbe(`${baseUrl}/api/v1/images/generations`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model, prompt: "test" }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const latencyMs = Date.now() - start;
+    }, start);
+    if (fetchError) return networkFailure(latencyMs, fetchError);
     const rawText = await res.text().catch(() => "");
     let parsed = null;
     try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
@@ -107,13 +123,12 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
     form.append("file", sampleAudio, "test.wav");
     form.append("model", model);
 
-    const res = await fetch(`${baseUrl}/api/v1/audio/transcriptions`, {
+    const { res, latencyMs, fetchError } = await postProbe(`${baseUrl}/api/v1/audio/transcriptions`, {
       method: "POST",
       headers: Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== "content-type")),
       body: form,
-      signal: AbortSignal.timeout(15000),
-    });
-    const latencyMs = Date.now() - start;
+    }, start);
+    if (fetchError) return networkFailure(latencyMs, fetchError);
     const rawText = await res.text().catch(() => "");
     let parsed = null;
     try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
@@ -130,7 +145,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
     return { ok: true, latencyMs, error: null, status: res.status };
   }
 
-  const res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+  const { res, latencyMs, fetchError } = await postProbe(`${baseUrl}/api/v1/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -143,9 +158,8 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
       stream: false,
       messages: [{ role: "user", content: "hi" }],
     }),
-    signal: AbortSignal.timeout(15000),
-  });
-  const latencyMs = Date.now() - start;
+  }, start);
+  if (fetchError) return networkFailure(latencyMs, fetchError);
 
   const rawText = await res.text().catch(() => "");
   let parsed = null;
