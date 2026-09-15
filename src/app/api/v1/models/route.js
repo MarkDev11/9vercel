@@ -138,6 +138,21 @@ const parseOpenAIStyleModels = (data) => {
 const MODELS_LIST_TTL_MS = 60 * 1000;
 const LIVE_RESOLVER_TTL_MS = 10 * 60 * 1000;
 const COMPAT_FETCH_TTL_MS = 10 * 60 * 1000;
+// Live upstream catalogs have no internal timeout — cap them so one hanging
+// provider can't stall the whole /v1/models response (fail-open to static IDs).
+const LIVE_RESOLVER_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      console.log(`[models] live resolver timeout (${ms}ms): ${label} — using static IDs`);
+      resolve(null);
+    }, ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 const _modelsListCache = new Map(); // key -> { at, value }
 const _liveResolverCache = new Map(); // key -> { at, value }
@@ -442,7 +457,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           liveCapabilitiesById = new Map(cachedLive.caps);
         } else {
           try {
-            const live = await liveResolver(conn);
+            const live = await withTimeout(liveResolver(conn), LIVE_RESOLVER_TIMEOUT_MS, providerId);
             if (live?.models?.length) {
               rawModelIds = live.models.map((m) => m.id);
               liveModelKindById = new Map(
