@@ -181,13 +181,17 @@ export async function createSupabaseAdapter(connectionString) {
     globalSql = global._supabaseSql;
   } else {
     // Serverless-friendly settings: small pool (free-tier Supabase has few
-    // connections), keep idle conns a bit longer so warm instances reuse
-    // them, fail fast (connect_timeout) is intentionally NOT lowered — a
-    // timeout here silently falls back to ephemeral SQLite on Vercel.
+    // connections). idle_timeout stays SHORT on purpose: Vercel freezes
+    // processes between requests and the pooler may close idle sockets
+    // server-side — a long idle window raises the chance of checking out a
+    // half-dead socket that stalls until TCP timeout. Reconnects are cheap
+    // now that functions are colocated (hnd1) with the DB (ap-northeast-1).
+    // connect_timeout is intentionally NOT lowered — a timeout here silently
+    // falls back to ephemeral SQLite on Vercel.
     globalSql = postgres(connectionString, {
       prepare: false,
       max: 3,
-      idle_timeout: 30,
+      idle_timeout: 10,
       connect_timeout: 10,
       max_lifetime: 60 * 30,
       // Suppress notice logs
@@ -311,6 +315,19 @@ export async function createSupabaseAdapter(connectionString) {
     } catch {}
   }
 
+  // Force-drop the shared pool (frozen/thawed serverless instances or a
+  // pooler-side close can leave half-dead sockets that stall new queries).
+  // Next createSupabaseAdapter() call builds a fresh pool.
+  async function resetPool() {
+    try {
+      await globalSql?.end?.({ timeout: 2 });
+    } catch {}
+    globalSql = null;
+    try {
+      if (typeof globalThis !== "undefined") globalThis._supabaseSql = null;
+    } catch {}
+  }
+
   return {
     driver: "supabase-postgres",
     run,
@@ -319,6 +336,7 @@ export async function createSupabaseAdapter(connectionString) {
     exec,
     transaction,
     close,
+    resetPool,
     raw: sql,
   };
 }

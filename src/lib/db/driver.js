@@ -194,16 +194,78 @@ async function initAdapter() {
   return adapter;
 }
 
+// Fail-fast guard: adapter init (TLS + SELECT 1 + migrations) normally takes
+// ~1-2.5s colocated. If it stalls (half-dead pooled socket after a
+// freeze/thaw), don't hang the request for a minute — reset the pool, retry
+// once, then throw so the client retries on a healthy instance.
+const INIT_TIMEOUT_MS = 20000;
+
+function settleInit() {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve({ ok: false, error: `timeout ${INIT_TIMEOUT_MS}ms` });
+      }
+    }, INIT_TIMEOUT_MS);
+    timer.unref?.();
+    initAdapter().then(
+      (adapter) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve({ ok: true, adapter });
+        }
+      },
+      (error) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve({ ok: false, error: error?.message || String(error) });
+        }
+      },
+    );
+  });
+}
+
+async function initWithRecovery() {
+  const t0 = Date.now();
+  try {
+    const first = await settleInit();
+    if (first.ok) {
+      state.instance = first.adapter;
+      console.log(`[DB] adapter ready in ${Date.now() - t0}ms (${first.adapter.driver})`);
+      return first.adapter;
+    }
+    console.warn(`[DB] adapter init stalled/failed (${first.error}) — resetting pool, retrying once`);
+    // Drop half-dead sockets: the adapter module recreates the pool when
+    // globalThis._supabaseSql is null (see createSupabaseAdapter).
+    try {
+      if (state.instance?.resetPool) await state.instance.resetPool();
+      else if (typeof globalThis !== "undefined" && globalThis._supabaseSql?.end) {
+        try { await globalThis._supabaseSql.end({ timeout: 2 }); } catch {}
+        globalThis._supabaseSql = null;
+      }
+    } catch {}
+    state.initPromise = null;
+    state.instance = null;
+    const second = await settleInit();
+    if (!second.ok) throw new Error(`[DB] adapter init failed twice (${second.error})`);
+    state.instance = second.adapter;
+    console.log(`[DB] adapter ready in ${Date.now() - t0}ms (${second.adapter.driver}) [retry]`);
+    return second.adapter;
+  } catch (e) {
+    // Don't brick the instance on a rejected init — let the next request try fresh.
+    state.initPromise = null;
+    state.instance = null;
+    throw e;
+  }
+}
+
 export async function getAdapter() {
   if (state.instance) return state.instance;
-  if (!state.initPromise) {
-    const t0 = Date.now();
-    state.initPromise = initAdapter().then((a) => {
-      state.instance = a;
-      console.log(`[DB] adapter ready in ${Date.now() - t0}ms (${a.driver})`);
-      return a;
-    });
-  }
+  if (!state.initPromise) state.initPromise = initWithRecovery();
   return state.initPromise;
 }
 
