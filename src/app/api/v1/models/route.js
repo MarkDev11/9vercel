@@ -7,23 +7,18 @@ import {
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
-import { resolveKiroModels } from "open-sse/services/kiroModels.js";
-import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
-import { resolveQoderModels } from "open-sse/services/qoderModels.js";
-import { resolveCopilotModels } from "open-sse/services/copilotModels.js";
-import { resolveClinepassModels } from "open-sse/services/clinepassModels.js";
-import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
-import { resolveCursorModels } from "open-sse/services/cursorModels.js";
-import { resolveZedModels } from "open-sse/shared/zedAuth.js";
-import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 
 // Per-provider live model resolvers. Each receives a connection record and
 // returns { models: [{ id, name? }, ...] } | null on failure.
 // Adding a provider here makes /v1/models prefer the live catalog for it.
+//
+// Resolvers are lazy-loaded (dynamic import) so a cold start only parses the
+// modules for providers the user actually connected — e.g. an instance with
+// only OpenAI-compatible connections never loads kiro/copilot/cursor stacks.
 const LIVE_MODEL_RESOLVERS = {
   kiro: async (conn) => {
+    const { resolveKiroModels } = await import("open-sse/services/kiroModels.js");
     const result = await resolveKiroModels({
       accessToken: conn.accessToken,
       refreshToken: conn.refreshToken,
@@ -32,6 +27,7 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   qoder: async (conn) => {
+    const { resolveQoderModels } = await import("open-sse/services/qoderModels.js");
     const result = await resolveQoderModels({
       accessToken: conn.accessToken,
       refreshToken: conn.refreshToken,
@@ -45,6 +41,7 @@ const LIVE_MODEL_RESOLVERS = {
     };
   },
   kimchi: async (conn) => {
+    const { resolveKimchiModels } = await import("open-sse/services/kimchiModels.js");
     const result = await resolveKimchiModels({
       accessToken: conn.accessToken,
       apiKey: conn.apiKey,
@@ -53,6 +50,10 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   github: async (conn) => {
+    const [{ resolveCopilotModels }, { updateProviderCredentials }] = await Promise.all([
+      import("open-sse/services/copilotModels.js"),
+      import("@/sse/services/tokenRefresh"),
+    ]);
     const result = await resolveCopilotModels({
       accessToken: conn.accessToken,
       refreshToken: conn.refreshToken,
@@ -70,6 +71,7 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   clinepass: async (conn) => {
+    const { resolveClinepassModels } = await import("open-sse/services/clinepassModels.js");
     const result = await resolveClinepassModels({
       accessToken: conn.accessToken,
       apiKey: conn.apiKey,
@@ -77,6 +79,11 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   "grok-cli": async (conn) => {
+    const [{ resolveGrokCliModels }, { updateProviderCredentials }, { resolveConnectionProxyConfig }] = await Promise.all([
+      import("open-sse/services/grokCliModels.js"),
+      import("@/sse/services/tokenRefresh"),
+      import("@/lib/network/connectionProxy"),
+    ]);
     const proxy = await resolveConnectionProxyConfig(conn.providerSpecificData || {});
     const result = await resolveGrokCliModels({
       ...conn,
@@ -100,6 +107,7 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   cursor: async (conn) => {
+    const { resolveCursorModels } = await import("open-sse/services/cursorModels.js");
     const result = await resolveCursorModels({
       accessToken: conn.accessToken,
       providerSpecificData: conn.providerSpecificData || {},
@@ -107,6 +115,7 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   zed: async (conn) => {
+    const { resolveZedModels } = await import("open-sse/shared/zedAuth.js");
     const result = await resolveZedModels({
       accessToken: conn.accessToken,
       providerSpecificData: conn.providerSpecificData || {},
@@ -362,6 +371,19 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   const models = [];
 
+  // getCapabilitiesForModel walks ~100 glob patterns per call; the list below
+  // resolves hundreds of models, so memoize per (provider, model).
+  const capsMemo = new Map();
+  const getCaps = (providerId, modelId) => {
+    const key = `${providerId}/${modelId}`;
+    let caps = capsMemo.get(key);
+    if (caps === undefined) {
+      caps = getCapabilitiesForModel(providerId, modelId);
+      capsMemo.set(key, caps);
+    }
+    return caps;
+  };
+
   // Combos first (filtered by kind). Web combos expose `kind` so AI knows search vs fetch.
   for (const combo of combos) {
     if (!comboMatchesKinds(combo, kindFilter)) continue;
@@ -580,7 +602,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         // dynamically-discovered LLM models still surface vision/reasoning/search/tools.
         const caps = liveCapabilitiesById.get(modelId)
           || capabilitiesFromServiceKind(customKind || liveKind)
-          || (kind === LLM_KIND ? getCapabilitiesForModel(providerId, modelId) : null);
+          || (kind === LLM_KIND ? getCaps(providerId, modelId) : null);
         if (caps) model.capabilities = caps;
         // Token limits under the snake_case names the OpenAI/OpenRouter
         // convention uses. `capabilities.contextWindow` is camelCase and nested,
@@ -596,7 +618,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           // (often just { tools: true }), so fill the gaps from the static
           // table rather than emitting null and leaving clients to guess.
           if (!Number.isFinite(contextWindow) || !Number.isFinite(maxOutput)) {
-            const fallback = getCapabilitiesForModel(providerId, modelId);
+            const fallback = getCaps(providerId, modelId);
             if (!Number.isFinite(contextWindow)) contextWindow = fallback.contextWindow;
             if (!Number.isFinite(maxOutput)) maxOutput = fallback.maxOutput;
           }
