@@ -142,9 +142,12 @@ const parseOpenAIStyleModels = (data) => {
 // Serverless instances are recycled often; these only need to survive long
 // enough to make warm requests cheap. TTLs are deliberately short so
 // dashboard edits (connections/combos/models) show up quickly.
-// - Full list: 60s (stale max 1 min after a dashboard edit)
+// - Full list: 3 min (stale max 3 min after a dashboard edit)
 // - Live upstream catalogs (kiro/qoder/copilot/…): 10 min (slow-moving)
-const MODELS_LIST_TTL_MS = 60 * 1000;
+// - Capability pattern-match results: 10 min, global per instance
+const MODELS_LIST_TTL_MS = 3 * 60 * 1000;
+const CAPS_MEMO_TTL_MS = 10 * 60 * 1000;
+const _capsMemoGlobal = new Map(); // `${providerId}/${modelId}` -> { at, caps }
 const LIVE_RESOLVER_TTL_MS = 10 * 60 * 1000;
 const COMPAT_FETCH_TTL_MS = 10 * 60 * 1000;
 // Live upstream catalogs have no internal timeout — cap them so one hanging
@@ -376,16 +379,17 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   const models = [];
 
-  // getCapabilitiesForModel walks ~100 glob patterns per call; the list below
-  // resolves hundreds of models, so memoize per (provider, model).
-  const capsMemo = new Map();
+  // getCapabilitiesForModel walks ~100 glob patterns per call and the list
+  // below resolves ~700+ models — memoize GLOBALLY per instance (not per
+  // call) so repeated misses don't redo the CPU work. 10-min TTL so daily
+  // catalog syncs still take effect; size-capped for long-lived instances.
   const getCaps = (providerId, modelId) => {
     const key = `${providerId}/${modelId}`;
-    let caps = capsMemo.get(key);
-    if (caps === undefined) {
-      caps = getCapabilitiesForModel(providerId, modelId);
-      capsMemo.set(key, caps);
-    }
+    const hit = _capsMemoGlobal.get(key);
+    if (hit && Date.now() - hit.at < CAPS_MEMO_TTL_MS) return hit.caps;
+    const caps = getCapabilitiesForModel(providerId, modelId);
+    _capsMemoGlobal.set(key, { at: Date.now(), caps });
+    if (_capsMemoGlobal.size > 5000) _capsMemoGlobal.delete(_capsMemoGlobal.keys().next().value);
     return caps;
   };
 
