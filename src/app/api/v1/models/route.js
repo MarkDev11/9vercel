@@ -316,6 +316,10 @@ export async function buildModelsList(kindFilter, options = {}) {
   const cachedList = _cacheGet(_modelsListCache, listCacheKey, MODELS_LIST_TTL_MS);
   if (cachedList) return cachedList;
 
+  // Optional phase timings (options.timing = {}) for cold-start diagnosis.
+  const timing = options.timing || {};
+  const tAll = Date.now();
+
   // Fetch the 5 DB sources concurrently — serial awaits cost ~1 Supabase
   // RTT each (5x latency on every cold/warm miss).
   const [connRes, comboRes, customRes, aliasRes, disabledRes] = await Promise.allSettled([
@@ -325,6 +329,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     getModelAliases(),
     getDisabledModels(),
   ]);
+  timing.dbMs = Date.now() - tAll;
 
   let connections = [];
   if (connRes.status === "fulfilled") {
@@ -439,6 +444,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     // serially costs ~1 RTT per provider on every cache miss.
     const providerEntries = [...activeConnectionByProvider.entries()]
       .filter(([providerId]) => providerMatchesKinds(providerId, kindFilter));
+    const tPhase1 = Date.now();
     const resolvedIds = new Map(await Promise.all(providerEntries.map(async ([providerId, conn]) => {
       const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
       const providerModels = PROVIDER_MODELS[staticAlias] || [];
@@ -508,6 +514,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     })));
 
     // Phase 2: build entries (pure sync — no awaits left in this loop).
+    timing.phase1Ms = Date.now() - tPhase1;
     for (const [providerId, conn] of providerEntries) {
       const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
       const outputAlias = (
@@ -658,6 +665,8 @@ export async function buildModelsList(kindFilter, options = {}) {
   }
 
   _cacheSet(_modelsListCache, listCacheKey, dedupedModels);
+  timing.totalMs = Date.now() - tAll;
+  console.log(`[models] built ${dedupedModels.length} (db=${timing.dbMs}ms phase1=${timing.phase1Ms || 0}ms total=${timing.totalMs}ms conns=${connections.length})`);
   return dedupedModels;
 }
 

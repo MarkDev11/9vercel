@@ -196,7 +196,14 @@ async function initAdapter() {
 
 export async function getAdapter() {
   if (state.instance) return state.instance;
-  if (!state.initPromise) state.initPromise = initAdapter().then((a) => { state.instance = a; return a; });
+  if (!state.initPromise) {
+    const t0 = Date.now();
+    state.initPromise = initAdapter().then((a) => {
+      state.instance = a;
+      console.log(`[DB] adapter ready in ${Date.now() - t0}ms (${a.driver})`);
+      return a;
+    });
+  }
   return state.initPromise;
 }
 
