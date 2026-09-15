@@ -252,11 +252,18 @@ export async function runMigrationOnce(adapter) {
   // 1. Always run versioned migrations chain (skip-version safe)
   const migInfo = await runVersionedMigrations(adapter);
 
-  // 2. Additive sync (auto add missing columns/indexes declared in TABLES)
-  await syncSchemaFromTables(adapter);
+  // Free-tier cold-start fast-path: when no migration was applied and the
+  // schema markers are already current, tables/indexes/columns exist — skip
+  // ~30 CREATE TABLE/INDEX roundtrips on every serverless cold start.
+  // The markers live in the DB itself, so a wiped DB re-runs the full path.
+  const schemaSettled = !fresh && migInfo.applied === 0 && storedSchemaVer >= SCHEMA_VERSION;
+  if (!schemaSettled) {
+    // 2. Additive sync (auto add missing columns/indexes declared in TABLES)
+    await syncSchemaFromTables(adapter);
 
-  // Stamp the schema version we just reached so future boots skip re-backup.
-  await setMetaSync(adapter, "backupSchemaVersion", SCHEMA_VERSION);
+    // Stamp the schema version we just reached so future boots skip re-backup.
+    await setMetaSync(adapter, "backupSchemaVersion", SCHEMA_VERSION);
+  }
 
   // 3. One-time legacy JSON import (only if DB was fresh on entry)
   let alreadyImported = false;

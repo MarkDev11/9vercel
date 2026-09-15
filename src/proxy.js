@@ -48,5 +48,7 @@ export default async function proxy(request) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon\\.ico).*)"],
+  // Skip the auth/DB middleware for static assets — serving them never needs
+  // getSettings()/validateApiKey() and must not pay a Supabase roundtrip.
+  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|avif|css|js|map|txt|xml|webmanifest|woff2?)$).*)"],
 };

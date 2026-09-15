@@ -180,11 +180,14 @@ export async function createSupabaseAdapter(connectionString) {
   if (global._supabaseSql) {
     globalSql = global._supabaseSql;
   } else {
-    // Serverless-friendly settings: low pool, no prepared statements (pgbouncer)
+    // Serverless-friendly settings: small pool (free-tier Supabase has few
+    // connections), keep idle conns a bit longer so warm instances reuse
+    // them, fail fast (connect_timeout) is intentionally NOT lowered — a
+    // timeout here silently falls back to ephemeral SQLite on Vercel.
     globalSql = postgres(connectionString, {
       prepare: false,
-      max: 5,
-      idle_timeout: 10,
+      max: 3,
+      idle_timeout: 30,
       connect_timeout: 10,
       max_lifetime: 60 * 30,
       // Suppress notice logs

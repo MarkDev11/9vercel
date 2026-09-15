@@ -129,6 +129,36 @@ const parseOpenAIStyleModels = (data) => {
   return data?.data || data?.models || data?.results || [];
 };
 
+// ── Free-tier cold-start optimization: short-lived in-memory caches ────────
+// Serverless instances are recycled often; these only need to survive long
+// enough to make warm requests cheap. TTLs are deliberately short so
+// dashboard edits (connections/combos/models) show up quickly.
+// - Full list: 60s (stale max 1 min after a dashboard edit)
+// - Live upstream catalogs (kiro/qoder/copilot/…): 10 min (slow-moving)
+const MODELS_LIST_TTL_MS = 60 * 1000;
+const LIVE_RESOLVER_TTL_MS = 10 * 60 * 1000;
+const COMPAT_FETCH_TTL_MS = 10 * 60 * 1000;
+
+const _modelsListCache = new Map(); // key -> { at, value }
+const _liveResolverCache = new Map(); // key -> { at, value }
+const _compatFetchCache = new Map(); // key -> { at, value }
+
+function _cacheGet(map, key, ttlMs) {
+  const entry = map.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at > ttlMs) {
+    map.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function _cacheSet(map, key, value) {
+  map.set(key, { at: Date.now(), value });
+  // Bound memory on long-lived instances (self-host): keep newest 200.
+  if (map.size > 200) map.delete(map.keys().next().value);
+}
+
 // Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
 // and break recursive loops between 9router instances connected to each other.
 const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
@@ -172,6 +202,12 @@ async function fetchCompatibleModelIds(connection) {
 
   if (!baseUrl) return [];
 
+  // Cache per connection+baseUrl: the upstream catalog changes rarely, and
+  // without this every /v1/models hit pays a live fetch (up to 5s timeout).
+  const compatCacheKey = `compat:${connection.id || ""}:${baseUrl}`;
+  const cachedCompat = _cacheGet(_compatFetchCache, compatCacheKey, COMPAT_FETCH_TTL_MS);
+  if (cachedCompat) return cachedCompat;
+
   let url = `${baseUrl}/models`;
   const headers = {
     "Content-Type": "application/json",
@@ -208,13 +244,17 @@ async function fetchCompatibleModelIds(connection) {
     const data = await response.json();
     const rawModels = parseOpenAIStyleModels(data);
 
-    return Array.from(
+    const ids = Array.from(
       new Set(
         rawModels
           .map((model) => model?.id || model?.name || model?.model)
           .filter((modelId) => typeof modelId === "string" && modelId.trim() !== "")
       )
     );
+    // Cache successes only — fail-open path below stays uncached so a dead
+    // upstream is retried on the next request instead of serving stale [].
+    _cacheSet(_compatFetchCache, compatCacheKey, ids);
+    return ids;
   } catch {
     return [];
   }
@@ -246,39 +286,54 @@ export async function buildModelsList(kindFilter, options = {}) {
   // 9router instance's fetchCompatibleModelIds — skip dynamic fetch to break
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
+
+  // Full-list cache: warm hits skip all DB + upstream work below.
+  const listCacheKey = `${[...kindFilter].sort().join(",")}|dyn:${skipDynamicFetch ? 0 : 1}`;
+  const cachedList = _cacheGet(_modelsListCache, listCacheKey, MODELS_LIST_TTL_MS);
+  if (cachedList) return cachedList;
+
+  // Fetch the 5 DB sources concurrently — serial awaits cost ~1 Supabase
+  // RTT each (5x latency on every cold/warm miss).
+  const [connRes, comboRes, customRes, aliasRes, disabledRes] = await Promise.allSettled([
+    getProviderConnections(),
+    getCombos(),
+    getCustomModels(),
+    getModelAliases(),
+    getDisabledModels(),
+  ]);
+
   let connections = [];
-  try {
-    connections = await getProviderConnections();
-    connections = connections.filter(c => c.isActive !== false);
-  } catch (e) {
+  if (connRes.status === "fulfilled") {
+    connections = (connRes.value || []).filter(c => c.isActive !== false);
+  } else {
     console.log("Could not fetch providers, returning all models");
   }
 
   let combos = [];
-  try {
-    combos = await getCombos();
-  } catch (e) {
+  if (comboRes.status === "fulfilled") {
+    combos = comboRes.value || [];
+  } else {
     console.log("Could not fetch combos");
   }
 
   let customModels = [];
-  try {
-    customModels = await getCustomModels();
-  } catch (e) {
+  if (customRes.status === "fulfilled") {
+    customModels = customRes.value || [];
+  } else {
     console.log("Could not fetch custom models");
   }
 
   let modelAliases = {};
-  try {
-    modelAliases = await getModelAliases();
-  } catch (e) {
+  if (aliasRes.status === "fulfilled") {
+    modelAliases = aliasRes.value || {};
+  } else {
     console.log("Could not fetch model aliases");
   }
 
   let disabledByAlias = {};
-  try {
-    disabledByAlias = await getDisabledModels();
-  } catch (e) {
+  if (disabledRes.status === "fulfilled") {
+    disabledByAlias = disabledRes.value || {};
+  } else {
     console.log("Could not fetch disabled models");
   }
   const isDisabled = (alias, modelId) => Array.isArray(disabledByAlias[alias]) && disabledByAlias[alias].includes(modelId);
@@ -381,26 +436,40 @@ export async function buildModelsList(kindFilter, options = {}) {
 
       // Config-driven live catalog override (e.g. Kiro returns dynamic
       // -thinking/-agentic variants per account). On failure, fall back to
-      // whatever rawModelIds already holds.
+      // whatever rawModelIds already holds. Cached per connection (10 min) so
+      // every /v1/models hit doesn't pay a live upstream fetch.
       const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
       if (liveResolver && !hasExplicitEnabledModels) {
-        try {
-          const live = await liveResolver(conn);
-          if (live?.models?.length) {
-            rawModelIds = live.models.map((m) => m.id);
-            liveModelKindById = new Map(
-              live.models
-                .filter((m) => m?.id)
-                .map((m) => [m.id, modelKind(m)])
-            );
-            liveCapabilitiesById = new Map(
-              live.models
-                .filter((m) => m?.id && m.capabilities)
-                .map((m) => [m.id, m.capabilities])
-            );
+        const liveCacheKey = `live:${providerId}:${conn.id}`;
+        const cachedLive = _cacheGet(_liveResolverCache, liveCacheKey, LIVE_RESOLVER_TTL_MS);
+        if (cachedLive) {
+          rawModelIds = cachedLive.ids;
+          liveModelKindById = new Map(cachedLive.kinds);
+          liveCapabilitiesById = new Map(cachedLive.caps);
+        } else {
+          try {
+            const live = await liveResolver(conn);
+            if (live?.models?.length) {
+              rawModelIds = live.models.map((m) => m.id);
+              liveModelKindById = new Map(
+                live.models
+                  .filter((m) => m?.id)
+                  .map((m) => [m.id, modelKind(m)])
+              );
+              liveCapabilitiesById = new Map(
+                live.models
+                  .filter((m) => m?.id && m.capabilities)
+                  .map((m) => [m.id, m.capabilities])
+              );
+              _cacheSet(_liveResolverCache, liveCacheKey, {
+                ids: rawModelIds,
+                kinds: [...liveModelKindById],
+                caps: [...liveCapabilitiesById],
+              });
+            }
+          } catch (err) {
+            console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
           }
-        } catch (err) {
-          console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
         }
       }
 
@@ -538,6 +607,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     dedupedModels.push(model);
   }
 
+  _cacheSet(_modelsListCache, listCacheKey, dedupedModels);
   return dedupedModels;
 }
 
