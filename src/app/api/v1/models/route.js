@@ -397,15 +397,13 @@ export async function buildModelsList(kindFilter, options = {}) {
       });
     }
   } else {
-    for (const [providerId, conn] of activeConnectionByProvider.entries()) {
-      if (!providerMatchesKinds(providerId, kindFilter)) continue;
-
+    // Phase 1: resolve raw model IDs per provider CONCURRENTLY. Both steps
+    // hit network (live upstream catalog, compatible /models) — awaiting them
+    // serially costs ~1 RTT per provider on every cache miss.
+    const providerEntries = [...activeConnectionByProvider.entries()]
+      .filter(([providerId]) => providerMatchesKinds(providerId, kindFilter));
+    const resolvedIds = new Map(await Promise.all(providerEntries.map(async ([providerId, conn]) => {
       const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
-      const outputAlias = (
-        conn?.providerSpecificData?.prefix
-        || getProviderAlias(providerId)
-        || staticAlias
-      ).trim();
       const providerModels = PROVIDER_MODELS[staticAlias] || [];
       const enabledModels = conn?.providerSpecificData?.enabledModels;
       const hasExplicitEnabledModels =
@@ -413,10 +411,6 @@ export async function buildModelsList(kindFilter, options = {}) {
       const isCompatibleProvider =
         isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
 
-      // Build kind lookup for static models so we can filter even when only IDs are exposed
-      const staticModelKindById = new Map(
-        providerModels.map((m) => [m.id, modelKind(m)])
-      );
       let liveModelKindById = new Map();
       let liveCapabilitiesById = new Map();
 
@@ -472,6 +466,25 @@ export async function buildModelsList(kindFilter, options = {}) {
           }
         }
       }
+
+      return [providerId, { rawModelIds, liveModelKindById, liveCapabilitiesById }];
+    })));
+
+    // Phase 2: build entries (pure sync — no awaits left in this loop).
+    for (const [providerId, conn] of providerEntries) {
+      const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+      const outputAlias = (
+        conn?.providerSpecificData?.prefix
+        || getProviderAlias(providerId)
+        || staticAlias
+      ).trim();
+      const providerModels = PROVIDER_MODELS[staticAlias] || [];
+      const { rawModelIds, liveModelKindById, liveCapabilitiesById } = resolvedIds.get(providerId);
+
+      // Build kind lookup for static models so we can filter even when only IDs are exposed
+      const staticModelKindById = new Map(
+        providerModels.map((m) => [m.id, modelKind(m)])
+      );
 
       const modelIds = rawModelIds
         .map((modelId) => {

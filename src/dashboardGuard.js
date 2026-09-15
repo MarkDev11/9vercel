@@ -7,6 +7,14 @@ import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
 
+// Free-tier cold-start: short in-memory caches for per-request middleware
+// reads. Without these, every request pays Supabase RTTs before the handler.
+const SETTINGS_TTL_MS = 30 * 1000;
+const APIKEY_POS_TTL_MS = 60 * 1000;
+const APIKEY_NEG_TTL_MS = 5 * 1000;
+let _settingsCache = { at: 0, value: null };
+const _apiKeyCache = new Map(); // apiKey -> { at, ok }
+
 let cachedCliToken = null;
 async function getCliToken() {
   if (!cachedCliToken) cachedCliToken = await getConsistentMachineId(CLI_TOKEN_SALT);
@@ -154,7 +162,19 @@ function extractApiKey(request) {
 async function hasValidApiKey(request) {
   const apiKey = extractApiKey(request);
   if (!apiKey) return false;
-  return await validateApiKey(apiKey);
+  // Free-tier: middleware runs on every request and Supabase lives in Tokyo
+  // while functions were in Virginia — cache verdicts briefly so each request
+  // doesn't pay a cross-region RTT before the handler runs. Tradeoff: a
+  // revoked key works for ≤60s per instance; a new key works within ≤5s.
+  const now = Date.now();
+  const cached = _apiKeyCache.get(apiKey);
+  if (cached && now - cached.at < (cached.ok ? APIKEY_POS_TTL_MS : APIKEY_NEG_TTL_MS)) {
+    return cached.ok;
+  }
+  const ok = await validateApiKey(apiKey);
+  _apiKeyCache.set(apiKey, { at: now, ok });
+  if (_apiKeyCache.size > 500) _apiKeyCache.delete(_apiKeyCache.keys().next().value);
+  return ok;
 }
 
 async function canAccessPublicLlmApi(request) {
@@ -175,12 +195,19 @@ async function hasValidToken(request) {
   return await verifyDashboardAuthToken(token);
 }
 
-// Read settings directly from DB to avoid self-fetch deadlock in proxy
+// Read settings directly from DB to avoid self-fetch deadlock in proxy.
+// Cached briefly: middleware calls this on every dashboard/API request.
 async function loadSettings() {
+  if (_settingsCache.value && Date.now() - _settingsCache.at < SETTINGS_TTL_MS) {
+    return _settingsCache.value;
+  }
   try {
-    return await getSettings();
+    const s = await getSettings();
+    if (s) _settingsCache = { at: Date.now(), value: s };
+    return s;
   } catch {
-    return null;
+    // DB blip: serve stale settings rather than failing every request.
+    return _settingsCache.value;
   }
 }
 
