@@ -1,4 +1,5 @@
 import { CODEBUDDY_INTL_CONFIG } from "../constants/oauth.js";
+import { extractEmailFromAccessToken, extractDisplayNameFromAccessToken } from "../providerHelpers.js";
 
 // CodeBuddy International — mirrors codebuddy-cn flow against the .ai domain.
 const codebuddyIntl = {
@@ -67,6 +68,11 @@ const codebuddyIntl = {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiresIn: tokens.expires_in || 86400,
+    // The CodeBuddy access token is a Keycloak JWT carrying email/name claims;
+    // surface them so a fresh OAuth login is named by identity instead of
+    // falling back to "Account N".
+    email: extractEmailFromAccessToken(tokens.access_token) || null,
+    displayName: extractDisplayNameFromAccessToken(tokens.access_token) || null,
     providerSpecificData: {},
   }),
 };
