@@ -128,6 +128,13 @@ Local dev (Laragon/Windows) needs zero config — it just uses SQLite. On Vercel
 set Supabase, because Vercel's filesystem is ephemeral (any SQLite file is wiped on every
 deploy/instance recycle).
 
+> **Fork status:** tracks upstream [`decolua/9router`](https://github.com/decolua/9router) at
+> **v0.5.81** (port branch `port/upstream-0.5.81`), plus two unmerged upstream fixes backported
+> here: OpenCode free-tier fingerprint quartet (upstream PR #4188, fixes 403 `FreeTierError`)
+> and usage reporting on `response.completed` for Codex auto-compact (upstream PR #4192).
+> Fork-only changes: Supabase Postgres adapter (auto-selected, pgbouncer-safe), Vercel cron for
+> OAuth refresh, fail-fast `JWT_SECRET`, `/tmp` fallbacks, and the docs in `DEPLOY_VERCEL*.md`.
+
 How it works: `src/lib/db/driver.js` auto-selects the database at boot — if `DATABASE_URL`
 (or `POSTGRES_URL` / `POSTGRES_URL_NON_POOLING` / `SUPABASE_DB_URL` / `SUPABASE_DATABASE_URL`) is set and is not a
 `[YOUR-PASSWORD]` placeholder, the app uses Supabase via the `postgres` (postgres.js) driver;
