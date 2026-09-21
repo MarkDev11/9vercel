@@ -214,8 +214,9 @@ describe("OpenCode Free Muse Spark thinking", () => {
     // User message, function_call, function_call_output, and next user message survive
     const types = out.input.map((item) => item.type);
     expect(types).toEqual(["message", "function_call", "function_call_output", "message"]);
-    // Tools flattened and empty properties added
-    expect(out.tools).toEqual([
+    // Tools flattened and empty properties added; the upstream-mandated file-search
+    // quartet is merged in (caller tools preserved first).
+    expect(out.tools.slice(0, 1)).toEqual([
       {
         type: "function",
         name: "shell",
@@ -223,5 +224,6 @@ describe("OpenCode Free Muse Spark thinking", () => {
         parameters: { type: "object", properties: {} },
       },
     ]);
+    expect(out.tools.map((t) => t.name)).toEqual(["shell", "bash", "glob", "grep", "read"]);
   });
 });

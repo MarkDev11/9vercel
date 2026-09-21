@@ -24,66 +24,59 @@ export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 export const OPENCODE_REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-// OpenCode free tier requires both 'bash' and 'read' in tools payload.
-// Injected as cloaked decoy tools so external CLI tools (e.g. Claude Code's Bash/Read)
-// take precedence while satisfying upstream verification.
-const OPENCODE_DECOY_CHAT_TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "bash",
-      description: "This tool is currently unavailable and must not be used.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read",
-      description: "This tool is currently unavailable and must not be used.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-];
+// Upstream free-tier gate (bisection vs genuine opencode client): Zen
+// rejects requests that do not look like the official OpenCode agentic
+// client with 403 FreeTierError. 0-3 of {bash, glob, grep, read} -> 403 on
+// both /chat/completions and /responses; the full quartet -> 200. Plain
+// chat callers send no tools, so without injection every such request 403s.
+// Merge the missing quartet declarations (caller tools preserved verbatim);
+// only missing fingerprint names are appended as no-op declarations.
+const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
 
-const OPENCODE_DECOY_RESPONSES_TOOLS = [
-  {
-    type: "function",
-    name: "bash",
-    description: "This tool is currently unavailable and must not be used.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
-    type: "function",
-    name: "read",
-    description: "This tool is currently unavailable and must not be used.",
-    parameters: { type: "object", properties: {} },
-  },
-];
+function toolNameOf(tool) {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
+  const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
+  const raw = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
+  return raw.trim();
+}
 
 function cloakOpencodeTools(body, isResponses) {
   if (!body || typeof body !== "object") return;
-  if (isResponses) {
-    if (!Array.isArray(body.tools)) body.tools = [];
-    const names = new Set(body.tools.map((t) => t.name || t.function?.name));
-    for (const tool of OPENCODE_DECOY_RESPONSES_TOOLS) {
-      if (!names.has(tool.name)) body.tools.push({ ...tool });
+  const hadTools = Array.isArray(body.tools) && body.tools.length > 0;
+  const present = new Set();
+  if (Array.isArray(body.tools)) {
+    for (const tool of body.tools) {
+      const name = toolNameOf(tool);
+      if (name) present.add(name);
     }
-    if (!body.tool_choice) body.tool_choice = "auto";
   } else {
-    const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
-    if (!hasTools) {
-      body.tools = OPENCODE_DECOY_CHAT_TOOLS.map((t) => ({ ...t, function: { ...t.function } }));
-      if (!body.tool_choice) body.tool_choice = "none";
-    } else {
-      const names = new Set(body.tools.map((t) => t.function?.name || t.name));
-      for (const tool of OPENCODE_DECOY_CHAT_TOOLS) {
-        if (!names.has(tool.function.name)) {
-          body.tools.push({ ...tool, function: { ...tool.function } });
-        }
-      }
-    }
+    body.tools = [];
   }
+  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
+    if (present.has(name)) continue;
+    body.tools.push(
+      isResponses
+        ? {
+            type: "function",
+            name,
+            description: `OpenCode built-in ${name} tool`,
+            parameters: { type: "object", properties: {} },
+          }
+        : {
+            type: "function",
+            function: {
+              name,
+              description: `OpenCode built-in ${name} tool`,
+              parameters: { type: "object", properties: {} },
+            },
+          },
+    );
+    present.add(name);
+  }
+  // Default the choice only when the caller sent no tools at all (previous
+  // behavior): an explicit or absent choice alongside caller tools is left
+  // for the forceAutoToolChoiceModels demotion to handle.
+  if (!hadTools && !body.tool_choice) body.tool_choice = isResponses ? "auto" : "none";
 }
 
 function hasValidOpencodeVersion(ua) {
@@ -505,9 +498,7 @@ export class OpenCodeExecutor extends BaseExecutor {
       body.store = false;
       normalizeResponsesTools(body);
       sanitizeResponsesItems(body);
-      if (!Array.isArray(body.tools) || body.tools.length === 0) {
-        cloakOpencodeTools(body, true);
-      }
+      cloakOpencodeTools(body, true);
     } else if (body && typeof body === "object") {
       cloakOpencodeTools(body, false);
     }
