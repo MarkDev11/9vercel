@@ -92,6 +92,24 @@ const OAUTH_TEST_CONFIG = {
     authPrefix: "Bearer ",
   },
   "codebuddy-cn": { tokenExists: true },
+  "codebuddy-intl": {
+    // Keycloak userinfo; realm base from the token's iss claim, falling back
+    // to the copilot realm when the token is opaque or iss-less.
+    buildUrl: (token) => {
+      try {
+        const parts = String(token || "").split(".");
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+          const iss = String(payload.iss || "").replace(/\/$/, "");
+          if (iss) return `${iss}/protocol/openid-connect/userinfo`;
+        }
+      } catch { /* fall through to default realm */ }
+      return "https://www.codebuddy.ai/auth/realms/copilot/protocol/openid-connect/userinfo";
+    },
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+  },
   kimchi: {
     url: KIMCHI_CONFIG.validationUrl || "https://api.cast.ai/v1/llm/openai/supported-providers",
     method: "GET",

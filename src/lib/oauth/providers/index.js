@@ -2,7 +2,7 @@
 import "open-sse/index.js";
 
 import { generatePKCE } from "../utils/pkce.js";
-import { extractCodexAccountInfo, fetchKiroProfileArn } from "../providerHelpers.js";
+import { extractCodexAccountInfo, fetchKiroProfileArn, extractEmailFromAccessToken, extractDisplayNameFromAccessToken } from "../providerHelpers.js";
 
 import claude from "./claude.js";
 import codex from "./codex.js";
@@ -22,6 +22,7 @@ import clinepass from "./clinepass.js";
 import gitlab from "./gitlab.js";
 import codebuddyCn from "./codebuddy-cn.js";
 import codebuddyIntl from "./codebuddy-intl.js";
+import freebuff from "./freebuff.js";
 import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
@@ -47,6 +48,7 @@ const PROVIDERS = {
   gitlab,
   "codebuddy-cn": codebuddyCn,
   "codebuddy-intl": codebuddyIntl,
+  freebuff,
   kimchi,
   trae,
   windsurf,
@@ -240,5 +242,42 @@ export async function backfillCodexEmails() {
   } catch (err) {
     codexBackfillDone = false;
     console.log("backfillCodexEmails failed:", err?.message || err);
+  }
+}
+
+// Run-once guard across the process lifetime
+let codeBuddyIntlBackfillDone = false;
+
+// Backfill email + displayName for legacy codebuddy-intl OAuth connections
+// created before mapTokens surfaced identity ("Account N", no email).
+export async function backfillCodeBuddyIntlIdentity() {
+  if (codeBuddyIntlBackfillDone) return;
+  codeBuddyIntlBackfillDone = true;
+  try {
+    const { getProviderConnections, updateProviderConnection } = await import("@/lib/localDb");
+    const connections = await getProviderConnections();
+    const targets = connections.filter((c) => {
+      if (c.provider !== "codebuddy-intl" || c.authType !== "oauth" || !c.accessToken) return false;
+      return !c.email || !c.displayName;
+    });
+    for (const conn of targets) {
+      const email = extractEmailFromAccessToken(conn.accessToken);
+      const displayName = extractDisplayNameFromAccessToken(conn.accessToken);
+      if (!email && !displayName) continue;
+      const patch = {};
+      if (!conn.email && email) patch.email = email;
+      if (!conn.displayName && displayName) patch.displayName = displayName;
+      // Replace generic placeholder names with the identity; keep user-customized names.
+      if (!conn.name || /^Account \d+$/.test(conn.name)) {
+        if (email) patch.name = email;
+        else if (displayName) patch.name = displayName;
+      }
+      if (Object.keys(patch).length) {
+        await updateProviderConnection(conn.id, patch);
+      }
+    }
+  } catch (err) {
+    codeBuddyIntlBackfillDone = false;
+    console.log("backfillCodeBuddyIntlIdentity failed:", err?.message || err);
   }
 }

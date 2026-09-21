@@ -50,6 +50,21 @@ function extractEmailFromAccessToken(accessToken) {
   return payload.email || payload.preferred_username || payload.sub || undefined;
 }
 
+// Human display name from OIDC-style JWT claims.
+// Preference: full `name` → given+family → email local-part.
+function extractDisplayNameFromAccessToken(accessToken) {
+  const payload = decodeJwtPayload(accessToken);
+  if (!payload) return undefined;
+  const full = typeof payload.name === "string" ? payload.name.trim() : "";
+  if (full) return full;
+  const given = typeof payload.given_name === "string" ? payload.given_name.trim() : "";
+  const family = typeof payload.family_name === "string" ? payload.family_name.trim() : "";
+  const combined = [given, family].filter(Boolean).join(" ").trim();
+  if (combined) return combined;
+  const email = typeof payload.email === "string" ? payload.email.trim() : "";
+  return email ? email.split("@")[0] : undefined;
+}
+
 export async function fetchKiroProfileArn(accessToken) {
   if (!accessToken) return null;
   try {
@@ -87,4 +102,5 @@ export {
   decodeXaiIdTokenEmail,
   decodeJwtPayload,
   extractEmailFromAccessToken,
+  extractDisplayNameFromAccessToken,
 };

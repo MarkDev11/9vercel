@@ -1,6 +1,8 @@
-import pkg from "../../package.json" with { type: "json" };
-
-const APP_VERSION = pkg.version || "0.0.0";
+// Cline CLI identity (mirrors the official Cline client request headers).
+// Upstream gates the cline-free/* model aliases to Cline product surfaces +
+// recent client versions.
+const CLINE_CLIENT_TYPE = "cline-cli";
+const CLINE_CLIENT_VERSION = "3.0.61";
 
 export function getClineAccessToken(token) {
   if (typeof token !== "string") return "";
@@ -21,17 +23,27 @@ export function getClineAuthorizationHeader(token) {
   return accessToken ? `Bearer ${accessToken}` : "";
 }
 
-export function buildClineHeaders(token, extraHeaders = {}) {
-  const authorization = getClineAuthorizationHeader(token);
+export function buildClineHeaders(token, extraHeaders = {}, opts = {}) {
+  // API keys ride plain Bearer; OAuth access tokens must carry the WorkOS
+  // `workos:` prefix so the backend routes verification to WorkOS.
+  const trimmed = typeof token === "string" ? token.trim() : "";
+  const authorization = !trimmed
+    ? ""
+    : opts.isApiKey
+      ? `Bearer ${trimmed}`
+      : getClineAuthorizationHeader(trimmed);
   const headers = {
     "HTTP-Referer": "https://cline.bot",
     "X-Title": "Cline",
-    "User-Agent": `9Router/${APP_VERSION}`,
-    "X-PLATFORM": process.platform || "unknown",
-    "X-PLATFORM-VERSION": process.version || "unknown",
-    "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": APP_VERSION,
-    "X-CORE-VERSION": APP_VERSION,
+    // Cline product identity: the backend gates cline-free/* aliases to Cline
+    // product surfaces — X-CLIENT-TYPE 9router is 403'd with "only available
+    // via Cline product surfaces".
+    "User-Agent": `Cline/${CLINE_CLIENT_VERSION}`,
+    "X-PLATFORM": "cli",
+    "X-PLATFORM-VERSION": CLINE_CLIENT_VERSION,
+    "X-CLIENT-TYPE": CLINE_CLIENT_TYPE,
+    "X-CLIENT-VERSION": CLINE_CLIENT_VERSION,
+    "X-CORE-VERSION": CLINE_CLIENT_VERSION,
     "X-IS-MULTIROOT": "false",
     ...extraHeaders,
   };

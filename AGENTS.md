@@ -35,6 +35,7 @@ npx vitest run unit/capabilities.test.js  # single file
 - Suite is **not green on clean checkout** (~2000 passed / ~125 failed at 0.5.81). Judge regressions by diffing the fail-set against baseline, never by raw count; ignore committed `test` script (hardcodes Unix `NODE_PATH`).
 - Known upstream-stale fails left red: `unit/kiro-external-idp.test.js` endpoint ordering (upstream reordered to `q.*` first, never updated the test). `it.fails` = known bug — flips red when fixed, then flip it to `it` and verify (0.5.81 flipped 2 image-preservation cases).
 - Translator tests MUST `import "./registerAll.js"` (ESM `require` no-op → false pass).
+- `tests/setup/isolateDataDir.js` (wired via `setupFiles` in `vitest.config.js`) redirects `DATA_DIR` to a temp dir — never remove it, or route-level tests write junk rows into the live `~/.9router` DB. Escape hatches: `RUN_REAL=1`, explicit `DATA_DIR`.
 - Snapshot churn: delete local `tests/translator/__snapshots__/golden-url-header.test.js.snap` before commit. JSON reporter paths are OS-specific — normalize `\` → `/` to `tests/...`.
 - `driver.js` `wrapAsync` makes DB always-async. Old tests calling `db.get/run/all` without `await` (written for upstream sync better-sqlite3) fail — pre-existing debt, don't "fix" in `driver.js`.
 
@@ -53,6 +54,7 @@ npx vitest run unit/capabilities.test.js  # single file
 - Pivots through **OpenAI as intermediate**; exact `source:target` pair = direct route (prefer for thinking blocks, tool ids, non-base64 images, `is_error`). Translators self-register via `register()` side effect — new file MUST be imported in `translator/index.js`.
 - Never hardcode roles/blocks/models — use `config/` + `translator/schema/`. New provider: copy `providers/REGISTRY_TEMPLATE.js` → `providers/registry/{id}.js` + models in `config/providerModels.js`; `registry/index.js` is auto-generated (use `scripts/migrate-registry.mjs`, don't hand-edit). Only non-OpenAI-compatible upstreams need an executor (`BaseExecutor` subclass, register in `executors/index.js`); binary upstreams (kiro EventStream, cursor protobuf, commandcode NDJSON) live in their executor, never the translator. CommandCode image blocks carry both `mediaType` and `mimeType`.
 - `rtk/` + headroom/caveman mutate in place and are **fail-open** — never throw; RTK skips `is_error` results. Qoder image uploads go to Qoder's own cloud endpoint, not local disk.
+- Freebuff (`fb`, ported from MIBP fork): OAuth device-flow via freebuff.com, chat on www.codebuff.com; executor claims a per-(token,model) session + registers a run per request. One session is locked to one model (409 `model_locked`) — advise separate accounts per model. Quota reads are GET-only (POST would burn a session).
 
 ## DB — async fork, upstream is sync
 
