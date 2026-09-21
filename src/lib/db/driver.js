@@ -125,6 +125,10 @@ async function tryBunSqlite() {
 
 async function tryBetterSqlite() {
   if (process.versions.bun) return null;
+  // Skip on Node >= 24: the native addon SIGSEGVs on load there, which is a
+  // process-level crash the try/catch below cannot recover from. node:sqlite covers it.
+  const [nodeMajor] = process.versions.node.split(".").map(Number);
+  if (nodeMajor >= 24) return null;
   try {
     const { createBetterSqliteAdapter } = await import("./adapters/betterSqliteAdapter.js");
     const a = createBetterSqliteAdapter(DATA_FILE);

@@ -82,6 +82,16 @@ describe("applyThinking per provider format", () => {
     // Sonnet 5). Both fields together are the documented adaptive shape.
     expect(out.thinking).toEqual({ type: "adaptive" });
   });
+  it("claude adaptive thinking maps auto effort to a supported level", () => {
+    const out = apply("claude", "claude-opus-4.7", { thinking: { type: "adaptive" } }, "claude");
+    expect(out.output_config).toEqual({ effort: "high" });
+    expect(out.thinking).toEqual({ type: "adaptive" });
+  });
+  it("permanently adaptive Claude maps auto effort without adding a thinking switch", () => {
+    const out = apply("claude", "claude-fable-5-1", { thinking: { type: "adaptive" } }, "claude");
+    expect(out.output_config).toEqual({ effort: "high" });
+    expect(out.thinking).toBeUndefined();
+  });
   it("Fable 5.1 → effort without a redundant thinking switch", () => {
     const out = apply("claude", "claude-fable-5-1", { reasoning_effort: "high" }, "claude");
     expect(out.output_config).toEqual({ effort: "high" });
@@ -239,6 +249,29 @@ describe("applyThinking per provider format", () => {
   it("Gemini model over its native format (antigravity/gemini-cli/vertex) still gets generationConfig", () => {
     const out = apply("gemini-cli", "gemini-3.5-flash-lite", { reasoning_effort: "medium" }, "gemini-cli");
     expect(out.generationConfig.thinkingConfig.thinkingLevel).toBe("medium");
+  });
+  it("commandcode envelope writes params.reasoning_effort, not wrapper fields", () => {
+    const out = apply("commandcode", "deepseek/deepseek-v4.1-flash", {
+      params: { model: "deepseek/deepseek-v4.1-flash", messages: [] },
+      reasoning_effort: "high",
+    }, "commandcode");
+    expect(out.params.reasoning_effort).toBe("high");
+    expect(out.reasoning_effort).toBeUndefined();
+    expect(out.thinking).toBeUndefined();
+  });
+  it("commandcode preserves low effort instead of remapping to high", () => {
+    const out = apply("commandcode", "deepseek/deepseek-v4.1-flash", {
+      params: { messages: [] },
+      reasoning_effort: "low",
+    }, "commandcode");
+    expect(out.params.reasoning_effort).toBe("low");
+  });
+  it("commandcode preserves max effort", () => {
+    const out = apply("commandcode", "deepseek/deepseek-v4.1-flash", {
+      params: { messages: [] },
+      reasoning_effort: "max",
+    }, "commandcode");
+    expect(out.params.reasoning_effort).toBe("max");
   });
 });
 
