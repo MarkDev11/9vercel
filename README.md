@@ -144,9 +144,11 @@ set Supabase, because Vercel's filesystem is ephemeral (any SQLite file is wiped
 deploy/instance recycle).
 
 > **Fork status:** tracks upstream [`decolua/9router`](https://github.com/decolua/9router) at
-> **v0.5.81** (port branch `port/upstream-0.5.81`), plus two unmerged upstream fixes backported
-> here: OpenCode free-tier fingerprint quartet (upstream PR #4188, fixes 403 `FreeTierError`)
-> and usage reporting on `response.completed` for Codex auto-compact (upstream PR #4192).
+> **v0.5.95** (port branch `port/upstream-0.5.95`, one commit per version 0.5.85/0.5.86/0.5.91/0.5.95), plus two unmerged upstream fixes backported
+> here: OpenCode free-tier fingerprint quartet (upstream PR #4188, fixes 403 `FreeTierError` —
+> superseded by upstream's own `opencodeFingerprint.js` module as of 0.5.85, which this fork adopts)
+> and usage reporting on `response.completed` for Codex auto-compact (upstream PR #4192, also
+> merged upstream in 0.5.85 — adopted).
 > Fork-only changes: Supabase Postgres adapter (auto-selected, pgbouncer-safe), Vercel cron for
 > OAuth refresh, fail-fast `JWT_SECRET`, `/tmp` fallbacks, and the docs in `DEPLOY_VERCEL*.md`.
 
