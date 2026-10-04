@@ -239,6 +239,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         const unique = (d?.connections || []).filter((c) => {
           if (c.isActive === false) return false;
           if (!isLLMProvider(c.provider)) return false;
+          if (AI_PROVIDERS[c.provider]?.hidden) return false;
           if (seen.has(c.provider)) return false;
           seen.add(c.provider);
           return true;
