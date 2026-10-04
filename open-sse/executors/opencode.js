@@ -6,6 +6,7 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
+import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -23,61 +24,6 @@ const REQ_FIELD = "_opencodeRequest";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 export const OPENCODE_REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-
-// Upstream free-tier gate (bisection vs genuine opencode client): Zen
-// rejects requests that do not look like the official OpenCode agentic
-// client with 403 FreeTierError. 0-3 of {bash, glob, grep, read} -> 403 on
-// both /chat/completions and /responses; the full quartet -> 200. Plain
-// chat callers send no tools, so without injection every such request 403s.
-// Merge the missing quartet declarations (caller tools preserved verbatim);
-// only missing fingerprint names are appended as no-op declarations.
-const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
-
-function toolNameOf(tool) {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
-  const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
-  const raw = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
-  return raw.trim();
-}
-
-function cloakOpencodeTools(body, isResponses) {
-  if (!body || typeof body !== "object") return;
-  const hadTools = Array.isArray(body.tools) && body.tools.length > 0;
-  const present = new Set();
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      const name = toolNameOf(tool);
-      if (name) present.add(name);
-    }
-  } else {
-    body.tools = [];
-  }
-  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
-    if (present.has(name)) continue;
-    body.tools.push(
-      isResponses
-        ? {
-            type: "function",
-            name,
-            description: `OpenCode built-in ${name} tool`,
-            parameters: { type: "object", properties: {} },
-          }
-        : {
-            type: "function",
-            function: {
-              name,
-              description: `OpenCode built-in ${name} tool`,
-              parameters: { type: "object", properties: {} },
-            },
-          },
-    );
-    present.add(name);
-  }
-  // Default the choice only when the caller sent no tools at all (previous
-  // behavior): an explicit or absent choice alongside caller tools is left
-  // for the forceAutoToolChoiceModels demotion to handle.
-  if (!hadTools && !body.tool_choice) body.tool_choice = isResponses ? "auto" : "none";
-}
 
 function hasValidOpencodeVersion(ua) {
   const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
@@ -485,10 +431,9 @@ export class OpenCodeExecutor extends BaseExecutor {
         if (body.max_completion_tokens !== undefined) body.max_output_tokens = body.max_completion_tokens;
         else if (body.max_tokens !== undefined) body.max_output_tokens = body.max_tokens;
       }
-      // Floor: muse-spark reasoning consumes the output budget, so a small
-      // client cap (e.g. max_tokens=200) starves text — upstream returns
-      // status incomplete (max_output_tokens) with empty content. 1024 leaves
-      // headroom for reasoning + a short visible answer.
+      // Fork: floor — muse-spark reasoning consumes the output budget, so a small
+      // client cap (e.g. max_tokens=200) starves text and upstream returns status
+      // incomplete with empty content. 1024 leaves headroom for reasoning + answer.
       const cap = Number(body.max_output_tokens);
       if (!Number.isFinite(cap) || cap < 1024) body.max_output_tokens = 1024;
       delete body.max_tokens;
@@ -498,9 +443,12 @@ export class OpenCodeExecutor extends BaseExecutor {
       body.store = false;
       normalizeResponsesTools(body);
       sanitizeResponsesItems(body);
-      cloakOpencodeTools(body, true);
+      // Free-tier fingerprint tools are required even when an agent client
+      // already supplied tools. ZCode/Claude Code requests normally have
+      // non-empty tool arrays; skipping cloaking here triggers 403 FreeTierError.
+      applyFingerprintTools(body, true);
     } else if (body && typeof body === "object") {
-      cloakOpencodeTools(body, false);
+      applyFingerprintTools(body, false);
     }
     return injectReasoningContent({ provider: this.provider, model, body });
   }

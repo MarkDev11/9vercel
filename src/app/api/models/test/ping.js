@@ -147,21 +147,59 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
     return { ok: true, latencyMs, error: null, status: res.status };
   }
 
-  const { res, latencyMs, fetchError } = await postProbe(`${baseUrl}/api/v1/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      // 1024 tokens: reasoning models (ClinePass/kimi-k3, deepseek-v4-pro, etc.) spend
-      // their budget on chain-of-thought before emitting an answer. A tiny probe like
-      // max_tokens:16 starves the answer and yields a false "no choices" failure.
-      // See issue #3010.
-      max_tokens: 1024,
-      stream: false,
-      messages: [{ role: "user", content: "hi" }],
-    }),
-  }, start);
-  if (fetchError) return networkFailure(latencyMs, fetchError);
+  if (kind === "systemone") {
+    const res = await fetch(`${baseUrl}/api/v1/systemone`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        state: "Customer: I was charged twice for my order this morning.",
+        questions: {
+          probe: { type: "noul", instructions: "Is the customer reporting a billing problem?" },
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const latencyMs = Date.now() - start;
+    const rawText = await res.text().catch(() => "");
+    let parsed = null;
+    try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
+
+    if (!res.ok) {
+      const detail = parsed?.error?.message || parsed?.msg || parsed?.message || parsed?.error || rawText;
+      return { ok: false, latencyMs, error: `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 240)}` : ""}`, status: res.status };
+    }
+
+    const hasAnswers = parsed?.answers && typeof parsed.answers === "object" && Object.keys(parsed.answers).length > 0;
+    if (!hasAnswers) {
+      return { ok: false, latencyMs, status: res.status, error: "Provider returned no answers for this model" };
+    }
+    return { ok: true, latencyMs, error: null, status: res.status };
+  }
+
+  // Fork note (Vercel): never throw on network failure (loopback is dead on
+  // serverless) — a failed probe is an expected { ok:false } result, not a 500.
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        // 1024 tokens: reasoning models (ClinePass/kimi-k3, deepseek-v4-pro, etc.) spend
+        // their budget on chain-of-thought before emitting an answer. A tiny probe like
+        // max_tokens:16 starves the answer and yields a false "no choices" failure.
+        // See issue #3010.
+        max_tokens: 1024,
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    return networkFailure(Date.now() - start, e);
+  }
+  const latencyMs = Date.now() - start;
 
   const rawText = await res.text().catch(() => "");
   let parsed = null;
