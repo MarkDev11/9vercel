@@ -30,10 +30,10 @@ export async function getCustomModels() {
 }
 
 // Atomic upsert inside transaction to prevent duplicate races.
-// Re-adding an existing model updates caps/name without resetting omitted fields.
+// Re-adding an existing model updates caps/name/transport without resetting omitted fields.
 // Fork note: kept async (await db.transaction/get/run) — our Supabase adapter is
 // always-async; upstream's sync form only works on better-sqlite3.
-export async function addCustomModel({ providerAlias, id, type = "llm", name, caps }) {
+export async function addCustomModel({ providerAlias, id, type = "llm", name, caps, transport }) {
   const k = customKey(providerAlias, id, type);
   const db = await getAdapter();
   // Concurrent-safe: two parallel inserts for the same key must not throw
@@ -43,7 +43,7 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
     const row = await db.get(`SELECT value FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
     if (row) {
       const prev = parseJson(row.value) || {};
-      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}) };
+      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) };
       const prevStr = row.value;
       const nextStr = stringifyJson(next);
       if (prevStr === nextStr) return false;
@@ -54,7 +54,7 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
       if ((res?.changes ?? 0) > 0) return false;
       continue; // parallel writer won — re-read and retry
     }
-    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}) });
+    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) });
     try {
       // Decide the winner by `changes`, not by re-reading the stored value:
       // every loser sees the winner's identical value string and would also
