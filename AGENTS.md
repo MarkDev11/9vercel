@@ -1,6 +1,6 @@
 # AGENTS.md
 
-9Router (`9router-app`) — Next.js dashboard + OpenAI-compatible gateway (`/v1/*`) routing to 40+ providers. This Vercel fork adds Supabase Postgres; upstream is SQLite-only. Currently at upstream **`v0.5.81`** (port branch `port/upstream-0.5.81`, one commit per version).
+9Router (`9router-app`) — Next.js dashboard + OpenAI-compatible gateway (`/v1/*`) routing to 40+ providers. This Vercel fork adds Supabase Postgres; upstream is SQLite-only. Currently at upstream **`v0.5.95`** (port branch `port/upstream-0.5.95`, one commit per version).
 
 ## Layout
 
@@ -32,8 +32,8 @@ npx vitest run                          # full (~60s)
 npx vitest run unit/capabilities.test.js  # single file
 ```
 
-- Suite is **not green on clean checkout** (~2000 passed / ~125 failed at 0.5.81). Judge regressions by diffing the fail-set against baseline, never by raw count; ignore committed `test` script (hardcodes Unix `NODE_PATH`).
-- Known upstream-stale fails left red: `unit/kiro-external-idp.test.js` endpoint ordering (upstream reordered to `q.*` first, never updated the test). `it.fails` = known bug — flips red when fixed, then flip it to `it` and verify (0.5.81 flipped 2 image-preservation cases).
+- Suite is **not green on clean checkout** (~2380 passed / ~125 failed at baseline; ~99 failed at 0.5.95 — upstream fixed cursor-proto). Judge regressions by diffing the fail-set against baseline, never by raw count; ignore committed `test` script (hardcodes Unix `NODE_PATH`).
+- Known upstream-stale fails left red (all verified failing on pristine upstream via scratch worktree): `unit/kiro-external-idp.test.js` endpoint ordering, `translator/thinking-unified` GLM-5.2 caps shadowing, cline paid-twin pricing, gpt-6.1-sol caps, codex refresh lead. Windows EPERM temp-cleanup + network flakes recorded separately (bodies green). `it.fails` = known bug OR intentional fork divergence (e.g. codebuddy-intl probe vs upstream tokenExists) — flips red when fixed/reverted, then flip it to `it` and verify (0.5.81 flipped 2 image-preservation cases).
 - Translator tests MUST `import "./registerAll.js"` (ESM `require` no-op → false pass).
 - `tests/setup/isolateDataDir.js` (wired via `setupFiles` in `vitest.config.js`) redirects `DATA_DIR` to a temp dir — never remove it, or route-level tests write junk rows into the live `~/.9router` DB. Escape hatches: `RUN_REAL=1`, explicit `DATA_DIR`.
 - Snapshot churn: delete local `tests/translator/__snapshots__/golden-url-header.test.js.snap` before commit. JSON reporter paths are OS-specific — normalize `\` → `/` to `tests/...`.
@@ -42,7 +42,7 @@ npx vitest run unit/capabilities.test.js  # single file
 ## Upstream porting (fork has no common ancestor with upstream)
 
 - Never `merge`/`cherry-pick` — port via `git checkout vX.Y.Z -- <paths>` selective checkout, one version per commit. `package.json` is version-bump-only: bump by hand, never bulk-checkout (keeps `postgres` dep).
-- Overlap files need `git merge-file` on **LF-normalized temp copies** (worktree is CRLF via `core.autocrlf`, blobs are LF — merging in place corrupts endings); write back as CRLF. Per-version overlap list: compute via `git diff --name-only vOLD..vNEW` ∩ fork files.
+- Overlap files need `git merge-file` on **LF-normalized temp copies** (worktree is CRLF via `core.autocrlf`, blobs are LF — merging in place corrupts endings); write back as CRLF. **Do not trust merge-file exit codes** (2/3/4 observed on successful merges in this env) — decide by marker scan (`^<{7}|^>{7}`), and re-extract + merge once if markers look nested (double-merge artifact). Per-version overlap list: compute via `git diff --name-only vOLD..vNEW` ∩ fork files. New registry providers consume `pNNN` slots — renumber fork entries (freebuff is now `p134`) and verify no duplicate identifiers + count via import.
 - Port gate per version: `npm run build` green + full vitest fail-set diffed vs baseline. Smoke: `/api/health`, login, `POST→GET→DELETE /api/combos`, cron 401-with-secret / `{"ok":true}`-without (dev default).
 
 ## Request flow

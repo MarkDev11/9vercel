@@ -14,8 +14,9 @@ const CREDS = { connectionId: "opencode-free-tool-choice-test" };
 const INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
 const TOOLS = [{ type: "function", name: "get_weather", description: "w", parameters: { type: "object", properties: {} } }];
 // Free-tier fingerprint quartet is always merged after caller tools (anti-403).
+// Descriptions match upstream opencodeFingerprint.js decoys.
 const QUARTET = ["bash", "glob", "grep", "read"].map((name) => ({
-  type: "function", name, description: `OpenCode built-in ${name} tool`,
+  type: "function", name, description: "This tool is currently unavailable and must not be used.",
   parameters: { type: "object", properties: {} },
 }));
 const TOOLS_PLUS_QUARTET = [...TOOLS, ...QUARTET];
@@ -47,7 +48,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     }
   });
 
-  it("giữ auto và absent; tools/input nguyên vẹn", () => {
+  it("giữ auto; absent defaults to auto; tools/input nguyên vẹn", () => {
     const autoOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, "auto"), true, CREDS,
     );
@@ -58,7 +59,8 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     const absentOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, undefined), true, CREDS,
     );
-    expect("tool_choice" in absentOut).toBe(false);
+    // Upstream fingerprint defaults Responses tool_choice to auto (0.5.85+).
+    expect(absentOut.tool_choice).toBe("auto");
     expect(absentOut.tools).toEqual(TOOLS_PLUS_QUARTET);
     expect(absentOut.input).toEqual(INPUT);
   });
