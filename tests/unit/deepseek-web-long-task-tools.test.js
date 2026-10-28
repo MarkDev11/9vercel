@@ -184,4 +184,14 @@ describe("deepseek-web long task coding harness enhancements", () => {
     // Must contain the most recent iteration
     expect(prompt).toContain("Result of step 30");
   });
+
+  it("parseDeepSeekToolCalls successfully parses tool call even if located in reasoning text", () => {
+    const reasoningText = "I need to check the file. Let me call read_file.\n<tool>{\"name\": \"execute_command\", \"arguments\": {\"command\": \"git status\"}}</tool>";
+    const parsed = parseDeepSeekToolCalls(reasoningText, "call_test", sampleTools);
+    expect(parsed.toolCalls).not.toBeNull();
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("execute_command");
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.command).toBe("git status");
+  });
 });

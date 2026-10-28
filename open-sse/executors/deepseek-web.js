@@ -280,8 +280,17 @@ function transformSSE(deepseekStream, model) {
                 for (const entry of v) {
                   if (entry?.p === "response" && entry?.v?.thinking_enabled === true) {
                     currentPath = "thinking";
+                  } else if (entry?.p === "response" && entry?.v?.thinking_enabled === false) {
+                    currentPath = "content";
+                  }
+                  if (entry?.p === "response/thinking_enabled") {
+                    currentPath = entry?.v === true ? "thinking" : "content";
                   }
                 }
+              }
+
+              if (p === "response/thinking_enabled" || p === "thinking_enabled") {
+                currentPath = v === true ? "thinking" : "content";
               }
 
               if (p === "response/search_status") continue;
@@ -423,8 +432,17 @@ async function collectSSEContent(deepseekStream, model) {
           for (const entry of v) {
             if (entry?.p === "response" && entry?.v?.thinking_enabled === true) {
               currentPath = "thinking";
+            } else if (entry?.p === "response" && entry?.v?.thinking_enabled === false) {
+              currentPath = "content";
+            }
+            if (entry?.p === "response/thinking_enabled") {
+              currentPath = entry?.v === true ? "thinking" : "content";
             }
           }
+        }
+
+        if (p === "response/thinking_enabled" || p === "thinking_enabled") {
+          currentPath = v === true ? "thinking" : "content";
         }
 
         if (p === "response/search_status") continue;
@@ -696,6 +714,13 @@ function buildToolAwareOpenAIResult(opts) {
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
 
+  // If there are no tool calls and content is empty/whitespace, promote reasoningContent to content
+  // so downstream combo failover (deltaHasClientContent) and coding agents do not drop the turn as empty (stop).
+  let finalContent = content;
+  if (!hasCalls && (!finalContent || !finalContent.trim()) && reasoningContent && reasoningContent.trim()) {
+    finalContent = reasoningContent.trim();
+  }
+
   if (stream) {
     const encoder = new TextEncoder();
     const emit = (controller, delta, finish) => {
@@ -718,7 +743,7 @@ function buildToolAwareOpenAIResult(opts) {
         // Surrounding natural-language text (and reasoning) is emitted before the tool_calls
         // so a model reply that interleaves a plan with a call still reaches the client.
         if (reasoningContent) emit(controller, { reasoning_content: reasoningContent }, null);
-        if (content) emit(controller, { content }, null);
+        if (finalContent) emit(controller, { content: finalContent }, null);
         if (hasCalls) {
           emit(
             controller,
@@ -746,7 +771,7 @@ function buildToolAwareOpenAIResult(opts) {
     };
   }
 
-  const message = { role: "assistant", content: content || "" };
+  const message = { role: "assistant", content: finalContent || "" };
   if (reasoningContent) message.reasoning_content = reasoningContent;
   if (hasCalls) {
     message.tool_calls = toolCalls;
@@ -1001,6 +1026,16 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       if (hasTools) {
         let { content, reasoningContent } = await collectSSEContent(resp.body, clientModel);
         let parsed = parseDeepSeekToolCalls(content, `call-${Date.now()}`, requestedTools);
+        if ((!parsed.toolCalls || parsed.toolCalls.length === 0) && reasoningContent) {
+          const reasoningParsed = parseDeepSeekToolCalls(reasoningContent, `call-${Date.now()}`, requestedTools);
+          if (reasoningParsed.toolCalls && reasoningParsed.toolCalls.length > 0) {
+            parsed = {
+              toolCalls: reasoningParsed.toolCalls,
+              content: parsed.content || reasoningParsed.content,
+            };
+            reasoningContent = reasoningParsed.content;
+          }
+        }
 
         // DSML / malformed envelopes are explicit tool intent, not plain answers: retry once in a
         // fresh session. The reply goes through the same parser (fork DSML dialects stay nonce-
@@ -1034,6 +1069,16 @@ export class DeepSeekWebExecutor extends BaseExecutor {
           if (!resp.ok) return repairFailed("DeepSeek tool-call repair request failed.");
           ({ content, reasoningContent } = await collectSSEContent(resp.body, clientModel));
           parsed = parseDeepSeekToolCalls(content, `call-${Date.now()}`, requestedTools);
+          if ((!parsed.toolCalls || parsed.toolCalls.length === 0) && reasoningContent) {
+            const reasoningParsed = parseDeepSeekToolCalls(reasoningContent, `call-${Date.now()}`, requestedTools);
+            if (reasoningParsed.toolCalls && reasoningParsed.toolCalls.length > 0) {
+              parsed = {
+                toolCalls: reasoningParsed.toolCalls,
+                content: parsed.content || reasoningParsed.content,
+              };
+              reasoningContent = reasoningParsed.content;
+            }
+          }
           if (hasMalformedDeepSeekToolMarkup(parsed.content)) {
             return repairFailed("DeepSeek emitted an invalid tool call after repair.");
           }
@@ -1073,7 +1118,11 @@ export class DeepSeekWebExecutor extends BaseExecutor {
 
       const { content, reasoningContent } = await collectSSEContent(resp.body, clientModel);
       await cleanupFn();
-      const message = { role: "assistant", content };
+      let finalContent = content;
+      if ((!finalContent || !finalContent.trim()) && reasoningContent && reasoningContent.trim()) {
+        finalContent = reasoningContent.trim();
+      }
+      const message = { role: "assistant", content: finalContent || "" };
       if (reasoningContent) message.reasoning_content = reasoningContent;
       const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
