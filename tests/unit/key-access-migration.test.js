@@ -50,7 +50,7 @@ describe("apiKeys access columns: upgrade from the previous schema", () => {
     writeLegacyDb(tempDir);
     const { db, adapter } = await boot();
 
-    const cols = adapter.all(`PRAGMA table_info(apiKeys)`).map((c) => c.name);
+    const cols = (await adapter.all(`PRAGMA table_info(apiKeys)`)).map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(["accessRestricted", "accessAllow"]));
 
     const keys = await db.getApiKeys();

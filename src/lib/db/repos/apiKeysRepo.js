@@ -70,7 +70,7 @@ export async function updateApiKey(id, data) {
       `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, accessRestricted = ?, accessAllow = ? WHERE id = ?`,
       [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, cols.accessRestricted, cols.accessAllow, id]
     );
-    result = rowToKey(db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
+    result = rowToKey(await db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
   });
   return result;
 }

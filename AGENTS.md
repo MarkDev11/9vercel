@@ -1,6 +1,6 @@
 # AGENTS.md
 
-9Router (`9router-app`) — Next.js dashboard + OpenAI-compatible gateway (`/v1/*`) routing to 40+ providers. This fork's whole point is the **Vercel + Supabase Postgres deploy**; upstream is SQLite-only. Ported through upstream **`v0.5.95`** (tags `v0.5.85`…`v0.5.95`, one commit/port per version, merged to `main`).
+9Router (`9router-app`) — Next.js dashboard + OpenAI-compatible gateway (`/v1/*`) routing to 40+ providers. This fork's whole point is the **Vercel + Supabase Postgres deploy**; upstream is SQLite-only. Ported through upstream **`v0.5.111`** (tags `v0.5.104`/`v0.5.109`/`v0.5.111`, one commit/port per version, on `main`).
 
 ## Layout
 
@@ -49,7 +49,7 @@ npx vitest run unit/capabilities.test.js  # single file (path relative to tests/
 ## Upstream porting (fork has no common ancestor with upstream)
 
 - Never `merge`/`cherry-pick` — port via `git checkout vX.Y.Z -- <paths>` selective checkout, one version per commit. `package.json` is version-bump-only: bump by hand, never bulk-checkout (keeps `postgres` dep).
-- Overlap files need `git merge-file` on **LF-normalized temp copies** (worktree is CRLF via `core.autocrlf`, blobs are LF — merging in place corrupts endings); write back as CRLF. **Do not trust merge-file exit codes** (2/3/4 observed on successful merges) — decide by marker scan (`^<{7}|^>{7}`), and re-extract + merge once if markers look nested (double-merge artifact). Per-version overlap list: `git diff --name-only vOLD..vNEW` ∩ fork files. New registry providers consume `pNNN` slots — renumber fork entries (freebuff is now `p134`) and verify no duplicate identifiers + count via import.
+- Overlap files need `git merge-file` on **LF-normalized temp copies** (worktree is CRLF via `core.autocrlf`, blobs are LF — merging in place corrupts endings); write back as CRLF. **Do not trust merge-file exit codes** (2/3/4 observed on successful merges) — decide by marker scan (`^<{7}|^>{7}`), and re-extract + merge once if markers look nested (double-merge artifact). Per-version overlap list: `git diff --name-only vOLD..vNEW` ∩ fork files. New registry providers consume `pNNN` slots — renumber fork entries (freebuff is now `p153`; upstream numbering wins) and verify no duplicate identifiers + count via import.
 - Port gate per version: `npm run build` green + full vitest fail-set diffed vs the previous baseline.
 
 ## Request flow

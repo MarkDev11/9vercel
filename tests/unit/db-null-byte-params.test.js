@@ -64,11 +64,11 @@ describe("driver binds NUL-containing strings safely", () => {
     const { getAdapter } = await import("@/lib/db/driver.js");
     const db = await getAdapter();
 
-    db.run("CREATE TABLE IF NOT EXISTS nulTest (id INTEGER PRIMARY KEY, label TEXT)");
+    await db.run("CREATE TABLE IF NOT EXISTS nulTest (id INTEGER PRIMARY KEY, label TEXT)");
 
     expect(() => db.run("INSERT INTO nulTest (label) VALUES (?)", [DIRTY])).not.toThrow();
 
-    const row = db.get("SELECT label FROM nulTest");
+    const row = await db.get("SELECT label FROM nulTest");
     expect(row.label).toBe("beforeafter");
   });
 
@@ -76,10 +76,10 @@ describe("driver binds NUL-containing strings safely", () => {
     const { getAdapter } = await import("@/lib/db/driver.js");
     const db = await getAdapter();
 
-    db.run("CREATE TABLE IF NOT EXISTS nulLookup (id INTEGER PRIMARY KEY, label TEXT)");
-    db.run("INSERT INTO nulLookup (label) VALUES (?)", [DIRTY]);
+    await db.run("CREATE TABLE IF NOT EXISTS nulLookup (id INTEGER PRIMARY KEY, label TEXT)");
+    await db.run("INSERT INTO nulLookup (label) VALUES (?)", [DIRTY]);
 
-    const row = db.get("SELECT label FROM nulLookup WHERE label = ?", [DIRTY]);
+    const row = await db.get("SELECT label FROM nulLookup WHERE label = ?", [DIRTY]);
     expect(row?.label).toBe("beforeafter");
   });
 
