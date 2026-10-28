@@ -96,9 +96,10 @@ async function syncSchemaFromTables(adapter) {
     // query fail with "column does not exist" in production.
     const existingNames = supa
       ? await postgresColumnNames(adapter, tableName)
-      : new Set((await adapter.all(`PRAGMA table_info(${tableName})`)).map((r) => r.name));
+      : new Set((await adapter.all(`PRAGMA table_info(${tableName})`)).map((r) => String(r.name || "").toLowerCase()));
     for (const [colName, colDef] of Object.entries(def.columns)) {
-      if (!existingNames.has(colName)) {
+      // Postgres stores identifiers lower-cased, so compare case-insensitively.
+      if (!existingNames.has(colName.toLowerCase())) {
         // SQLite ADD COLUMN restrictions: no PRIMARY KEY / UNIQUE w/o NULL ok.
         // We strip PRIMARY KEY / UNIQUE since those are only valid at create time.
         const safeDef = colDef
@@ -106,7 +107,13 @@ async function syncSchemaFromTables(adapter) {
           .replace(/UNIQUE/i, "")
           .trim();
         try {
-          await adapter.exec(`ALTER TABLE ${tableName} ADD COLUMN ${colName} ${safeDef}`);
+          // Postgres supports "IF NOT EXISTS" (keeps the statement idempotent
+          // even when the lookup above missed an existing column). SQLite does
+          // NOT support that syntax — it gets a plain ADD COLUMN there.
+          const alter = supa
+            ? `ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS ${colName} ${safeDef}`
+            : `ALTER TABLE ${tableName} ADD COLUMN ${colName} ${safeDef}`;
+          await adapter.exec(alter);
           console.log(`[DB][sync] +column ${tableName}.${colName}`);
         } catch (e) {
           console.warn(`[DB][sync] add column ${tableName}.${colName} failed: ${e.message}`);
@@ -117,10 +124,17 @@ async function syncSchemaFromTables(adapter) {
 }
 
 // Fork note (Vercel): column names of an existing Postgres table.
+//
+// Postgres folds unquoted identifiers to lower case, so the table created as
+// `apiKeys` is really `apikeys` and its columns are `accessrestricted`,
+// `accessallow`, ... The lookup MUST therefore be case-insensitive — a plain
+// `table_name = 'apiKeys'` match returns nothing, every column looks missing,
+// and the sync then fires one failing ALTER per column on every cold start
+// (~70 round trips to Tokyo, 12s instead of 200ms).
 async function postgresColumnNames(adapter, tableName) {
   try {
     const rows = await adapter.all(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = '${tableName.replace(/'/g, "''")}'`
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND lower(table_name) = lower('${tableName.replace(/'/g, "''")}')`
     );
     return new Set((rows || []).map((r) => (r.column_name || r.columnName || "").toLowerCase()));
   } catch (e) {
