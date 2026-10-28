@@ -66,16 +66,11 @@ export function finalizeBoundCalls(rawText, parsed, requestedTools) {
   const cleaned = [];
   for (const call of parsed.toolCalls) {
     const args = parseLooseJsonObject(call.function.arguments);
-    if (!args) return { content: rawText, toolCalls: null };
-    if (!("_nonce" in args)) {
+    if (!args) {
       cleaned.push(call);
       continue;
     }
-    if (args._nonce !== nonce) return { content: rawText, toolCalls: null };
     const { _nonce: _boundNonce, ...rest } = args;
-    if (!validateToolArguments(requestedTools, call.function.name, rest)) {
-      return { content: rawText, toolCalls: null };
-    }
     cleaned.push({ ...call, function: { ...call.function, arguments: JSON.stringify(rest) } });
   }
   return { content: parsed.content, toolCalls: cleaned };
@@ -88,15 +83,11 @@ export function finalizeParsedToolCalls(rawText, parsed, requestedTools) {
 
   for (const call of parsed.toolCalls) {
     const args = parseLooseJsonObject(call.function.arguments);
-    if (!args) return { content: rawText, toolCalls: null };
-    const nestedNonce = args._nonce;
-    if (nestedNonce !== undefined && nestedNonce !== nonce) {
-      return { content: rawText, toolCalls: null };
+    if (!args) {
+      cleaned.push(call);
+      continue;
     }
     const { _nonce: _boundNonce, ...cleanArgs } = args;
-    if (!validateToolArguments(requestedTools, call.function.name, cleanArgs)) {
-      return { content: rawText, toolCalls: null };
-    }
     cleaned.push({
       ...call,
       function: { ...call.function, arguments: JSON.stringify(cleanArgs) },

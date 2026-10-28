@@ -107,7 +107,9 @@ export function serializeDeepSeekToolPrompt(tools) {
     "- If your runtime forces DSML instead, every DSML invoke MUST include this exact binding:",
     `<｜｜DSML｜｜ parameter name="_nonce" string="true">${nonce}</｜｜DSML｜｜ parameter>`,
     "  A DSML invoke without that binding is invalid and will be rejected.",
-    "- If no tool is needed, just answer normally without any <tool> block.",
+    "- For coding, editing, and file tasks, ALWAYS invoke tools to read, edit, write, and test files. Never output file changes only as text code blocks when tools are available.",
+    "- Continue invoking tools turn-by-turn until the user's objective is completely finished.",
+    "- If no tool is needed because the entire task is already complete, provide your final response to the user.",
     "",
     "Available tools:",
     ...lines,
@@ -126,6 +128,14 @@ function extractText(content) {
   return content == null ? "" : String(content);
 }
 
+const MAX_TOOL_OUTPUT_CHARS = 4000;
+function truncateToolOutput(text) {
+  if (typeof text !== "string" || text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const head = text.slice(0, 2400);
+  const tail = text.slice(-1200);
+  return `${head}\n... [${text.length - 3600} characters truncated for context window] ...\n${tail}`;
+}
+
 /**
  * Build the single `prompt` string for an agentic (tool-using) DeepSeek-web turn.
  *
@@ -140,15 +150,44 @@ export function buildToolConversationPrompt(messages, toolSystemPrompt) {
   const systemParts = [];
   if (toolSystemPrompt) systemParts.push(toolSystemPrompt);
 
-  const lines = [];
-  const callNameById = new Map();
-  let sawToolActivity = false;
-
+  const nonSystem = [];
   for (const m of messages) {
     if (m.role === "system") {
       const t = extractText(m.content).trim();
       if (t) systemParts.push(t);
-    } else if (m.role === "user") {
+    } else {
+      nonSystem.push(m);
+    }
+  }
+
+  // Cap history length for long tasks to avoid web payload/context limits.
+  // Always preserve the very first user message (the original objective/prompt)
+  // and the most recent N turns.
+  const MAX_HISTORY_TURNS = 24;
+  let activeMessages = nonSystem;
+  let omittedPriorTurns = false;
+
+  if (nonSystem.length > MAX_HISTORY_TURNS) {
+    const firstUser = nonSystem.find((m) => m.role === "user");
+    const recent = nonSystem.slice(-MAX_HISTORY_TURNS);
+    if (firstUser && !recent.includes(firstUser)) {
+      activeMessages = [firstUser, ...recent];
+      omittedPriorTurns = true;
+    } else {
+      activeMessages = recent;
+    }
+  }
+
+  const lines = [];
+  const callNameById = new Map();
+  let sawToolActivity = false;
+
+  for (let i = 0; i < activeMessages.length; i++) {
+    const m = activeMessages[i];
+    if (omittedPriorTurns && i === 1) {
+      lines.push("[... earlier conversation turns omitted for brevity ...]");
+    }
+    if (m.role === "user") {
       const t = extractText(m.content).trim();
       if (t) lines.push(`User: ${t}`);
     } else if (m.role === "assistant") {
@@ -167,7 +206,8 @@ export function buildToolConversationPrompt(messages, toolSystemPrompt) {
       }
       if (parts.length) lines.push(`Assistant: ${parts.join("\n")}`);
     } else if (m.role === "tool") {
-      const t = extractText(m.content).trim();
+      const rawText = extractText(m.content).trim();
+      const t = truncateToolOutput(rawText);
       const name = (m.tool_call_id && callNameById.get(m.tool_call_id)) || m.name || "tool";
       lines.push(`Tool result (${name}): ${t || "(no output)"}`);
       sawToolActivity = true;
@@ -178,10 +218,13 @@ export function buildToolConversationPrompt(messages, toolSystemPrompt) {
   if (systemParts.length) parts.push(systemParts.join("\n\n"));
   if (lines.length) parts.push(lines.join("\n\n"));
   if (sawToolActivity) {
-    // Anchor the model to the work already done so it advances instead of repeating it.
+    // Anchor the model to work autonomously until the task is completely finished.
     parts.push(
-      "Continue the task using the tool results above. Do NOT repeat tool calls that already " +
-        "succeeded; perform the next step or give the final answer."
+      "You are working autonomously in a coding harness. Continue the task using the tool results above.\n" +
+        "- Do NOT repeat tool calls that already succeeded.\n" +
+        "- If the task is still in progress, you MUST call the next appropriate tool using the <tool> format immediately to continue inspecting, editing, running, or verifying code.\n" +
+        "- Do NOT stop to write markdown explanations or instructions for the user when more tool actions are needed.\n" +
+        "- Only give a final conversational answer when the entire objective requested by the user is 100% finished and verified."
     );
   }
 

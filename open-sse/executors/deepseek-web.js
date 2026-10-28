@@ -464,12 +464,11 @@ async function collectSSEContent(deepseekStream, model) {
   const citations = appendSearchCitations(searchResults, streamModel);
   if (citations) content += `\n\n${citations}`;
 
-  // The upstream HTTP body closed without ever sending `response/status: "FINISHED"`.
-  // That means the DeepSeek web session was cut off mid-generation (expired cookie,
-  // anti-bot challenge, network drop, etc.) rather than genuinely completing. Surface
-  // this as an error (caught by execute()'s try/catch -> 502) instead of returning the
-  // partial stub as a successful "stop" response.
-  if (!sawFinished) {
+  // If the upstream HTTP body closed without sending `response/status: "FINISHED"`,
+  // check whether we actually received content. If NO content was received at all,
+  // surface as an error. If partial or full content or reasoning was received, keep it
+  // rather than throwing away the entire generation and returning a 502 to the harness.
+  if (!sawFinished && !content.trim() && !reasoningContent.trim()) {
     throw new Error(
       "DeepSeek web session ended before completion (no FINISHED signal received) — " +
         "likely a dropped cookie session or network interruption upstream. Retry the request."
@@ -1041,10 +1040,16 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         }
 
         await cleanupFn();
+        let finalContent = parsed.content;
+        if (parsed.toolCalls && parsed.toolCalls.length > 0) {
+          if (finalContent && /^(\s*\[\d+\]\s*https?:\/\/[^\s]+)*\s*$/i.test(finalContent.trim())) {
+            finalContent = "";
+          }
+        }
         return buildToolAwareOpenAIResult({
           stream: stream !== false,
           clientModel,
-          content: parsed.content,
+          content: finalContent,
           reasoningContent,
           toolCalls: parsed.toolCalls,
           reqHeaders,

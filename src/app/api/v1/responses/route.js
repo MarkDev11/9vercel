@@ -13,6 +13,8 @@ async function loadChatPipeline() {
   return handleChat;
 }
 
+export const maxDuration = 300;
+
 export async function OPTIONS() {
   return new Response(null, {
     headers: {
