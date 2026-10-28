@@ -882,10 +882,36 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         return { valid, error: valid ? null : "Session expired — re-paste cookie" };
       }
       case "opencode": {
-        const res = await fetchWithConnectionProxy("https://opencode.ai/zen/v1/models", {
-          headers: { Authorization: "Bearer public", "User-Agent": "opencode/1.18.31" },
-        }, effectiveProxy);
-        return { valid: res.ok, error: res.ok ? null : "OpenCode free tier unavailable" };
+        // Fork note: the free tier moved from /zen/v1 to /inference/v1 (OpenCode
+        // v2) and the gate keys on the TLS ClientHello — a native Node fetch is
+        // refused with 429 FreeUsageLimitError even when the body is faithful.
+        // Probe through the same impersonating client the executor uses, and
+        // treat "the model list answered" as a healthy connection.
+        const probe = async (url, init) => {
+          const { opencodeTlsFetch } = await import("open-sse/services/opencodeTlsClient.js");
+          try {
+            return await opencodeTlsFetch(url, init, { timeoutMs: 15000 });
+          } catch (e) {
+            // wreq-js missing / TLS session broken — fall back to the native
+            // path so the user still learns whether the upstream is reachable.
+            if (e?.name === "OpencodeTlsUnavailableError") {
+              return fetchWithConnectionProxy(url, { ...init, signal: AbortSignal.timeout(15000) }, effectiveProxy);
+            }
+            throw e;
+          }
+        };
+        try {
+          const res = await probe("https://opencode.ai/inference/v1/models", {
+            headers: { Authorization: "Bearer public", "User-Agent": "opencode/1.18.31" },
+          });
+          if (res.ok) return { valid: true, error: null };
+          if (res.status === 403 || res.status === 429) {
+            return { valid: false, error: "OpenCode free tier unavailable (TLS fingerprint rejected)" };
+          }
+          return { valid: false, error: `OpenCode free tier unavailable (HTTP ${res.status})` };
+        } catch (e) {
+          return { valid: false, error: `OpenCode free tier unavailable (${e?.message || e})` };
+        }
       }
       case "opencode-go": {
         const res = await fetchWithConnectionProxy("https://opencode.ai/zen/go/v1/chat/completions", {
