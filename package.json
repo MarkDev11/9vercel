@@ -53,10 +53,12 @@
     "@aws-sdk/credential-providers": "^3.1135.0",
     "ajv": "^8.17.1",
     "better-sqlite3": "^12.6.2",
+    "wreq-js": "^3.2.0",
     "ws": "^8.18.0"
   },
   "comment_better_sqlite3": "kept in optionalDependencies so npm install doesn't fail on systems without build tools — sql.js is used as fallback at runtime",
   "comment_aws_sdk_credential_providers": "kept in optionalDependencies (npm still installs these by default) and imported lazily in shared/awsCredentials.js — only AWS Bedrock connections using profile/SSO mode need it; static accessKeyId/secretAccessKey connections never load it",
+  "comment_wreq_js": "optional dependency (not devDependency): the OpenCode free tier and the web providers gate on the TLS ClientHello, so the package must be present in the deployed serverless bundle — a devDependency is not traced by Next and the import then fails with 'Cannot read properties of undefined'. It stays optional so a platform without a prebuilt native binding still installs the app",
   "comment_playwright_core": "devDependency only (keeps end-user installs small); open-sse/services/lazyRuntime.js downloads it + wreq-js on first use into <DATA_DIR>/runtime. playwright-core ships no browser binaries (run `npx playwright-core install chromium` or point OBSCURA_CDP_ENDPOINT/cloakbrowser at a stealth engine)",
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
@@ -64,8 +66,7 @@
     "eslint-config-next": "16.4.2",
     "playwright-core": "^1.62.1",
     "postcss": "^8.5.6",
-    "tailwindcss": "^4",
-    "wreq-js": "^3.2.0"
+    "tailwindcss": "^4"
   },
   "overrides": {
     "dompurify": "^3.4.17",

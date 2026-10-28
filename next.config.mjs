@@ -34,6 +34,19 @@ const nextConfig = {
     root: tracingRoot
   },
   outputFileTracingRoot: tracingRoot,
+  // Fork note (Vercel): wreq-js is imported through a runtime-only dynamic
+  // import (open-sse/services/lazyRuntime.js), so Next's file tracing cannot
+  // see it and it would be missing from the serverless bundle. The OpenCode
+  // free tier and the web providers gate on the TLS ClientHello, so the
+  // package AND its platform-specific native binding must ship. The binding
+  // is an optionalDependency of wreq-js with a per-platform name, so it is
+  // listed explicitly here.
+  outputFileTracingIncludes: {
+    "/*": [
+      "./node_modules/wreq-js/**/*",
+      "./node_modules/@wreq-js/binding-*/**/*",
+    ],
+  },
   outputFileTracingExcludes: {
     "*": ["./gitbook/**/*"]
   },

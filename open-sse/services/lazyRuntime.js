@@ -7,11 +7,18 @@
 //
 // Never throws at import time of THIS module — failures surface from
 // loadRuntimeDep() with a manual-install hint.
+//
+// Fork note (Vercel): do NOT use createRequire() here. Webpack replaces
+// `node:module`'s createRequire with an empty CJS stub, so
+// `createRequire(...).resolve` is `undefined` and every call dies with
+// "Cannot read properties of undefined (reading 'resolve')". `import.meta.resolve`
+// is a native ESM primitive (Node >= 20.6) and survives bundling, so it is
+// the primary lookup; `process.getBuiltinModule("module")` is the fallback for
+// runtimes that lack it.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getWritableDataDir } from "../utils/writableDataDir.js";
 
@@ -28,6 +35,46 @@ function getRuntimeDir() {
 function isModuleMissing(error) {
   const code = String(error?.code || "");
   return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+}
+
+/**
+ * Resolve a package to an absolute file URL without createRequire.
+ * Returns null when the package is not installed.
+ *
+ * Order:
+ *  1. process.getBuiltinModule("module").createRequire — `process` is a real
+ *     global at runtime and webpack never stubs it, so this survives bundling.
+ *  2. import.meta.resolve — native ESM primitive, but webpack may replace
+ *     `import.meta` with a partial shim.
+ */
+function resolvePackageUrl(pkg, base) {
+  // 1) Builtin "module" via getBuiltinModule (not bundled by webpack).
+  try {
+    const mod = process.getBuiltinModule?.("module");
+    const createRequire = mod?.createRequire;
+    if (typeof createRequire === "function") {
+      const bases = base
+        ? [base]
+        : [path.join(getRuntimeDir(), "package.json"), path.join(process.cwd(), "package.json")];
+      for (const b of bases) {
+        try {
+          return pathToFileURL(createRequire(b).resolve(pkg)).href;
+        } catch {
+          /* try the next base */
+        }
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  // 2) Native ESM resolution — relative to this module (app install).
+  try {
+    const url = import.meta.resolve(pkg);
+    if (url) return url;
+  } catch {
+    /* not installed here — give up */
+  }
+  return null;
 }
 
 function npmInstall(pkg, version) {
@@ -48,17 +95,22 @@ const inflight = new Map();
 
 async function load(pkg) {
   // 1) Resolvable from the app install (dev machine / traced standalone).
-  try {
-    return await import(/* webpackIgnore: true */ pkg);
-  } catch (error) {
-    if (!isModuleMissing(error)) throw error;
+  const appUrl = resolvePackageUrl(pkg);
+  if (appUrl) {
+    try {
+      return await import(/* webpackIgnore: true */ appUrl);
+    } catch (error) {
+      if (!isModuleMissing(error)) throw error;
+    }
   }
   // 2) Already present in the runtime dir from a previous install.
-  const runtimeRequire = createRequire(path.join(getRuntimeDir(), "package.json"));
-  try {
-    return await import(pathToFileURL(runtimeRequire.resolve(pkg)).href);
-  } catch (error) {
-    if (!isModuleMissing(error)) throw error;
+  const runtimeUrl = resolvePackageUrl(pkg, path.join(getRuntimeDir(), "package.json"));
+  if (runtimeUrl) {
+    try {
+      return await import(/* webpackIgnore: true */ runtimeUrl);
+    } catch (error) {
+      if (!isModuleMissing(error)) throw error;
+    }
   }
   // 3) Download on demand, then import from the runtime dir.
   const version = LAZY_DEP_VERSIONS[pkg] || "latest";
@@ -71,7 +123,11 @@ async function load(pkg) {
       `install it manually: cd "${dir}" && npm install ${pkg}@${version}`
     );
   }
-  return import(pathToFileURL(createRequire(path.join(dir, "package.json")).resolve(pkg)).href);
+  const installedUrl = resolvePackageUrl(pkg, path.join(dir, "package.json"));
+  if (!installedUrl) {
+    throw new Error(`${pkg} was installed into "${dir}" but could not be resolved from there`);
+  }
+  return import(/* webpackIgnore: true */ installedUrl);
 }
 
 export function loadRuntimeDep(pkg) {
