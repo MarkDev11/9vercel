@@ -70,7 +70,7 @@ npx vitest run unit/capabilities.test.js  # single file (path relative to tests/
 
 - `src/lib/db/driver.js` order: Supabase (if `DATABASE_URL`|`POSTGRES_URL*`|`SUPABASE_*` set, non-`[YOUR-PASSWORD]`) → `bun:sqlite` → `better-sqlite3` (optional; skipped on Node ≥24 — native addon SIGSEGVs) → `node:sqlite` (≥22.5) → `sql.js`. Always `await db.get/run/all` and `await db.transaction(async () => ...)`.
 - Never copy upstream DB code verbatim — re-asyncify it, keep `// Fork note:` comments. New code imports `@/lib/db/index.js` (`src/lib/localDb.js` is a shim); logic in `repos/*`, schema in `migrations/`. Local dev needs zero DB config (SQLite via `src/lib/db/paths.js`: `DATA_DIR` else `~/.9router/`).
-- `usageDb.js` (`usage.json`/`log.txt`) stays under `~/.9router` regardless of `DATA_DIR`.
+- `usageDb.js` is only a shim — usage/logs now live in the same SQLite DB (`db/data.sqlite`), not in `~/.9router/usage.json`.
 
 ## Gotchas to preserve
 
