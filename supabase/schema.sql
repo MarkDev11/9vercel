@@ -59,9 +59,17 @@ CREATE TABLE IF NOT EXISTS apiKeys (
   name TEXT,
   machineId TEXT,
   isActive INTEGER DEFAULT 1,
-  createdAt TEXT NOT NULL
+  createdAt TEXT NOT NULL,
+  accessRestricted INTEGER DEFAULT 0,
+  accessAllow TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key);
+
+-- Fork note (Vercel): existing Supabase projects keep their old table shape —
+-- CREATE TABLE IF NOT EXISTS never adds a column. Run these once in the SQL
+-- Editor (safe to repeat) so per-key access control works on an existing DB.
+ALTER TABLE apiKeys ADD COLUMN IF NOT EXISTS accessRestricted INTEGER DEFAULT 0;
+ALTER TABLE apiKeys ADD COLUMN IF NOT EXISTS accessAllow TEXT;
 
 CREATE TABLE IF NOT EXISTS combos (
   id TEXT PRIMARY KEY,

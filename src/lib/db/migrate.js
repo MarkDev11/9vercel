@@ -89,10 +89,14 @@ async function syncSchemaFromTables(adapter) {
       try { await adapter.exec(idx); } catch {}
     }
 
-    // Diff columns via PRAGMA only on SQLite; Postgres relies on IF NOT EXISTS create above.
-    if (supa) continue;
-    const existing = await adapter.all(`PRAGMA table_info(${tableName})`);
-    const existingNames = new Set(existing.map((r) => r.name));
+    // Diff columns. SQLite uses PRAGMA; Postgres uses information_schema.
+    // Fork note (Vercel): Postgres CANNOT rely on "CREATE TABLE IF NOT EXISTS" for
+    // new columns — an existing table keeps its old shape, so a column added
+    // upstream (e.g. apiKeys.accessRestricted/accessAllow) would make every
+    // query fail with "column does not exist" in production.
+    const existingNames = supa
+      ? await postgresColumnNames(adapter, tableName)
+      : new Set((await adapter.all(`PRAGMA table_info(${tableName})`)).map((r) => r.name));
     for (const [colName, colDef] of Object.entries(def.columns)) {
       if (!existingNames.has(colName)) {
         // SQLite ADD COLUMN restrictions: no PRIMARY KEY / UNIQUE w/o NULL ok.
@@ -109,6 +113,21 @@ async function syncSchemaFromTables(adapter) {
         }
       }
     }
+  }
+}
+
+// Fork note (Vercel): column names of an existing Postgres table.
+async function postgresColumnNames(adapter, tableName) {
+  try {
+    const rows = await adapter.all(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = '${tableName.replace(/'/g, "''")}'`
+    );
+    return new Set((rows || []).map((r) => (r.column_name || r.columnName || "").toLowerCase()));
+  } catch (e) {
+    // information_schema is not readable (restricted role) — fall back to a
+    // no-op: the ALTER below then fails loudly instead of silently diverging.
+    console.warn(`[DB][sync] column lookup for ${tableName} failed: ${e.message}`);
+    return new Set();
   }
 }
 
