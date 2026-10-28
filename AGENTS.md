@@ -56,6 +56,13 @@ npx vitest run unit/capabilities.test.js  # single file (path relative to tests/
 - Overlap files need `git merge-file` on **LF-normalized temp copies** (worktree is CRLF via `core.autocrlf`, blobs are LF — merging in place corrupts endings); write back as CRLF. **Do not trust merge-file exit codes** (2/3/4 observed on successful merges) — decide by marker scan (`^<{7}|^>{7}`), and re-extract + merge once if markers look nested (double-merge artifact). Per-version overlap list: `git diff --name-only vOLD..vNEW` ∩ fork files. New registry providers consume `pNNN` slots — renumber fork entries (freebuff is now `p153`; upstream numbering wins) and verify no duplicate identifiers + count via import.
 - Port gate per version: `npm run build` green + full vitest fail-set diffed vs the previous baseline.
 
+## Runtime-only deps (Vercel serverless)
+
+- `wreq-js` (TLS impersonation) and `playwright-core` are loaded through `open-sse/services/lazyRuntime.js`, i.e. a **runtime-only dynamic import** — Next's file tracing cannot see it.
+- `wreq-js` therefore lives in `optionalDependencies` (not devDependencies) and `next.config.mjs` lists it plus its per-platform native binding under `outputFileTracingIncludes`. Moving it back to devDependencies silently drops it from the deployed bundle.
+- **Never use `createRequire` from `node:module` in bundled server code**: webpack replaces it with an empty CJS stub whose `.resolve` is `undefined` ("Cannot read properties of undefined (reading 'resolve')"). Use `process.getBuiltinModule("module").createRequire` — `process` is a real global and is never stubbed — or `import.meta.resolve`.
+- The OpenCode free tier and the web providers gate on the TLS ClientHello: a native Node fetch is refused (429/403) even when the body is faithful. Any probe for those providers must go through `open-sse/services/opencodeTlsClient.js`, not a plain `fetch`. The free tier lives under `/inference/v1` now; the old `/zen/v1` path is dead.
+
 ## Request flow
 
 `/v1/*` rewrite → `src/app/api/v1/*` → `src/sse/handlers/chat.js` (parse, combo/account loop) → `open-sse/handlers/chatCore.js` (detect format, RTK/headroom/caveman pre-hooks, `getExecutor`, `translateRequest/Response`) → `open-sse/executors/*` → SSE out. Aborts after HTTP 200 are reported in-band (per-format error frames), not silent closes; CommandCode mid-stream errors throw so fallback triggers.
