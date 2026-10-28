@@ -1,4 +1,4 @@
-// OpenAI → Gemini / Cursor / CommandCode request translation.
+// OpenAI â†’ Gemini / Cursor / CommandCode request translation.
 import { describe, it, expect } from "vitest";
 import "./registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
@@ -8,8 +8,8 @@ const O2G = (body) => translateRequest(FORMATS.OPENAI, FORMATS.GEMINI, "m", body
 const O2C = (body) => translateRequest(FORMATS.OPENAI, FORMATS.CURSOR, "m", body, true, null, "cursor");
 const O2CC = (body) => translateRequest(FORMATS.OPENAI, FORMATS.COMMANDCODE, "m", body, true, null, "commandcode");
 
-describe("OpenAI → Gemini", () => {
-  // openai-to-gemini.js:92-96 — each system message overwrites systemInstruction → only last kept
+describe("OpenAI â†’ Gemini", () => {
+  // openai-to-gemini.js:92-96 â€” each system message overwrites systemInstruction â†’ only last kept
   // KNOWN BUG
   it.fails("multiple system messages are all kept", () => {
     const out = O2G({
@@ -23,8 +23,8 @@ describe("OpenAI → Gemini", () => {
   });
 });
 
-describe("OpenAI → Cursor", () => {
-  // openai-to-cursor.js:12-24 — image content fully dropped (text only)
+describe("OpenAI â†’ Cursor", () => {
+  // openai-to-cursor.js:12-24 â€” image content fully dropped (text only)
   // KNOWN BUG
   it.fails("image content is preserved", () => {
     const out = O2C({
@@ -36,7 +36,7 @@ describe("OpenAI → Cursor", () => {
     expect(JSON.stringify(out), "image dropped").toContain("AAAA");
   });
 
-  // openai-to-cursor.js:179 — max_tokens hardcoded to 32000
+  // openai-to-cursor.js:179 â€” max_tokens hardcoded to 32000
   // KNOWN BUG
   it.fails("respects client max_tokens", () => {
     const out = O2C({ max_tokens: 200, messages: [{ role: "user", content: "hi" }] });
@@ -44,8 +44,8 @@ describe("OpenAI → Cursor", () => {
   });
 });
 
-describe("OpenAI → CommandCode", () => {
-  // openai-to-commandcode.js:53-57 — safeParseJson returns {} on bad JSON (args silently lost)
+describe("OpenAI â†’ CommandCode", () => {
+  // openai-to-commandcode.js:53-57 â€” safeParseJson returns {} on bad JSON (args silently lost)
   // KNOWN BUG
   it.fails("malformed tool arguments are not silently emptied", () => {
     const out = O2CC({
@@ -73,7 +73,7 @@ describe("OpenAI → CommandCode", () => {
     expect(JSON.stringify(out)).not.toContain("[image omitted]");
     expect(out.params.messages[0].content).toEqual([
       { type: "text", text: "look" },
-      { type: "image", image: "data:image/png;base64,BBBB", mediaType: "image/png", mimeType: "image/png" },
+      { type: "image", image: "data:image/png;base64,BBBB", mimeType: "image/png", mediaType: "image/png" },
     ]);
   });
 });

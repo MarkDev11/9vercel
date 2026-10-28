@@ -85,6 +85,7 @@ import p80 from "./searchapi.js";
 import p81 from "./searxng.js";
 import p82 from "./serper.js";
 import p83 from "./siliconflow.js";
+import p139 from "./sensenova.js";
 import p84 from "./stability-ai.js";
 import p85 from "./tavily.js";
 import p86 from "./together.js";
@@ -102,7 +103,7 @@ import p97 from "./xiaomi-tokenplan.js";
 import p98 from "./youcom.js";
 import p99 from "./alims-intl.js";
 import p100 from "./codebuddy-intl.js";
-// Temporarily hidden â€” no tool calling support (trae SOLO agent / windsurf gRPC skip ToolCallChunk).
+// Temporarily hidden Ã¢â‚¬â€ no tool calling support (trae SOLO agent / windsurf gRPC skip ToolCallChunk).
 // Re-enable by uncommenting both the import and the array entry below.
 // import p102 from "./trae.js";
 import p103 from "./zed.js";
@@ -138,7 +139,13 @@ import p135 from "./minimax-code-global.js";
 import p136 from "./bedrock.js";
 import p137 from "./bedrock-xai.js";
 import p138 from "./nous.js";
-import p139 from "./freebuff.js";
+import p152 from "./freebuff.js";
+import p140 from "./deepseek-web.js";
+import p143 from "./gemini-web.js";
+import p144 from "./muse-web.js";
+import p146 from "./chatgpt-web.js";
+import p147 from "./veoaifree-web.js";
+import p151 from "./uc-web.js";
 export default [
   p0,
   p1,
@@ -243,7 +250,7 @@ export default [
   p98,
   p99,
   p100,
-  // p102, // trae â€” hidden, no tool calling
+  // p102, // trae Ã¢â‚¬â€ hidden, no tool calling
   p103,
   p105,
   p106,
@@ -254,8 +261,8 @@ export default [
   p111,
   p112,
   p113,
-  // p114, // devin-cli â€” hidden, spawns local agent with shell/fs access
-  // p104, // windsurf â€” hidden, no tool calling
+  // p114, // devin-cli Ã¢â‚¬â€ hidden, spawns local agent with shell/fs access
+  // p104, // windsurf Ã¢â‚¬â€ hidden, no tool calling
   p115,
   p116,
   p117,
@@ -278,4 +285,11 @@ export default [
   p137,
   p138,
   p139,
+  p140,
+  p143,
+  p144,
+  p146,
+  p147,
+  p151,
+  p152,
 ];

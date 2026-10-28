@@ -5,10 +5,11 @@ import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, us
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select, Toggle } from "@/shared/components";
+import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select, Toggle, Badge, SmartPolicyModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -17,8 +18,8 @@ const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 // A request needing a capability the target model/combo lacks switches straight
 // to the first enabled model here instead of erroring or dropping the data.
 const CAPACITY_ADAPTER_CAPS = [
-  { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, …)" },
-  // pdf, videoInput temporarily hidden — no translator support yet for those blocks.
+  { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, Ã¢â‚¬Â¦)" },
+  // pdf, videoInput temporarily hidden Ã¢â‚¬â€ no translator support yet for those blocks.
   { key: "audioInput", label: "Audio", icon: "graphic_eq", desc: "audio input" },
 ];
 const DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free";
@@ -47,10 +48,23 @@ function normalizeCapEntry(entry) {
 }
 
 const STRATEGY_OPTIONS = [
-  { value: "fallback", label: "Fallback — try in order" },
-  { value: "round-robin", label: "Round Robin — rotate" },
-  { value: "fusion", label: "Fusion — panel + judge" },
+  { value: "fallback", label: "Fallback Ã¢â‚¬â€ try in order" },
+  { value: "round-robin", label: "Round Robin Ã¢â‚¬â€ rotate" },
+  { value: "smart", label: "Smart Router Ã¢â‚¬â€ System One" },
+  { value: "fusion", label: "Fusion Ã¢â‚¬â€ panel + judge" },
 ];
+
+function getPolicyBadgeLabel(strategy = {}) {
+  const policy = strategy.smartPolicy || (strategy.sessionSticky === false ? "per-turn" : "smart");
+  if (policy === "strict") return "Strict Lock";
+  if (policy === "per-turn") return "Per-Turn";
+  if (policy === "custom") {
+    const raw = strategy.confidenceThreshold;
+    const pct = Math.round((raw || 0.8) * (raw && raw <= 1 ? 100 : 1));
+    return `Custom (Ã¢â€°Â¥${pct || 80}%)`;
+  }
+  return "Smart (Ã¢â€°Â¥80%)";
+}
 
 export default function CombosPage() {
   const [combos, setCombos] = useState([]);
@@ -65,6 +79,7 @@ export default function CombosPage() {
   const [presetLoading, setPresetLoading] = useState(null); // "cursor" | "claude" | null
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
@@ -78,8 +93,21 @@ export default function CombosPage() {
   }, [combos]);
 
   const selectedCombos = combos.filter((c) => selectedIds.includes(c.id));
-  const allSelected = combos.length > 0 && selectedIds.length === combos.length;
   const someSelected = selectedIds.length > 0;
+
+  // Case-insensitive search over the combo name and its model ids, so both
+  // "deepseek" and "deepseek-v4.1-flash" find the right rows.
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredCombos = normalizedQuery
+    ? combos.filter((c) => {
+        if (String(c.name || "").toLowerCase().includes(normalizedQuery)) return true;
+        return (c.models || []).some((m) => String(m).toLowerCase().includes(normalizedQuery));
+      })
+    : combos;
+
+  // Select-all follows the search: with a query active it must only reach the
+  // rows on screen, otherwise the bulk Delete would take out hidden combos.
+  const allSelected = filteredCombos.length > 0 && filteredCombos.every((c) => selectedIds.includes(c.id));
 
   const toggleSelect = (id) => {
     setSelectedIds((prev) => (
@@ -88,7 +116,7 @@ export default function CombosPage() {
   };
 
   const toggleSelectAll = () => {
-    setSelectedIds(allSelected ? [] : combos.map((c) => c.id));
+    setSelectedIds(allSelected ? [] : filteredCombos.map((c) => c.id));
   };
 
   const clearSelection = () => setSelectedIds([]);
@@ -120,7 +148,7 @@ export default function CombosPage() {
 
       setConfirmState({
         title: `Generate ${label}`,
-        message: `Create ${toCreate} combo${toCreate === 1 ? "" : "s"} named like ${source === "cursor" ? "Cursor" : "Claude"} model IDs (seeded with cu/… or cc/…). ${toSkip} already exist and will be skipped. You can edit any combo afterward to add fallbacks.`,
+        message: `Create ${toCreate} combo${toCreate === 1 ? "" : "s"} named like ${source === "cursor" ? "Cursor" : "Claude"} model IDs (seeded with cu/Ã¢â‚¬Â¦ or cc/Ã¢â‚¬Â¦). ${toSkip} already exist and will be skipped. You can edit any combo afterward to add fallbacks.`,
         confirmText: "Generate",
         variant: "primary",
         onConfirm: async () => {
@@ -369,16 +397,40 @@ export default function CombosPage() {
             Group models under one name, then pick a strategy per combo:
           </p>
           <ul className="text-sm text-text-muted mt-2 flex flex-col gap-1">
-            <li><span className="font-medium text-text-main">Fallback</span> — tries models in order (next on failure)</li>
-            <li><span className="font-medium text-text-main">Round Robin</span> — rotates models across requests to spread load</li>
-            <li><span className="font-medium text-text-main">Fusion</span> — queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
+            <li><span className="font-medium text-text-main">Fallback</span> Ã¢â‚¬â€ tries models in order (next on failure)</li>
+            <li><span className="font-medium text-text-main">Round Robin</span> Ã¢â‚¬â€ rotates models across requests to spread load</li>
+            <li><span className="font-medium text-text-main">Smart Router</span> Ã¢â‚¬â€ queries a System One decision model to pick the optimal model before generation; supports Smart Switch (adaptive hysteresis), Strict Lock (1 task = 1 session, +0ms latency), and Per-Turn modes to maximize prompt-cache retention</li>
+            <li><span className="font-medium text-text-main">Fusion</span> Ã¢â‚¬â€ queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
           </ul>
           <p className="hidden text-xs text-text-muted mt-3 max-w-2xl">
-            <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit 9router without the prefix.
+            <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/Ã¢â‚¬Â¦</code> or <code className="font-mono">cc/Ã¢â‚¬Â¦</code> route so traffic can hit 9router without the prefix.
             {" "}Note: Cursor IDE itself often blocks built-in Composer / Grok from Override OpenAI Base URL (&quot;model does not support custom API&quot;); add them via Cursor&apos;s <span className="font-medium text-text-main">Add Custom Model</span> using the combo name, or pick a model Cursor allows through the custom endpoint.
           </p>
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-stretch">
+          <div className="relative w-full sm:w-64">
+            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-text-muted">
+              search
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search combosÃ¢â‚¬Â¦"
+              aria-label="Search combos"
+              className="w-full rounded-[10px] border border-transparent bg-surface-2 py-2 pl-10 pr-9 text-sm text-text-main transition-all duration-150 ease-out placeholder-text-muted/70 focus:border-brand-500/40 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted transition-colors hover:text-text-main"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            )}
+          </div>
           <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap">
             Create Combo
           </Button>
@@ -440,18 +492,23 @@ export default function CombosPage() {
               <span>
                 {someSelected
                   ? `${selectedIds.length} selected`
-                  : `Select all (${combos.length})`}
+                  : `Select all (${filteredCombos.length})`}
               </span>
             </label>
 
             <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {normalizedQuery && (
+                <span className="text-xs text-text-muted">
+                  {filteredCombos.length} of {combos.length} shown
+                </span>
+              )}
               {someSelected && (
                 <>
                   <div className="w-full min-w-[160px] sm:w-[200px]">
                     <Select
                       options={STRATEGY_OPTIONS}
                       value=""
-                      placeholder="Set strategy…"
+                      placeholder="Set strategyÃ¢â‚¬Â¦"
                       disabled={bulkBusy}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -487,7 +544,20 @@ export default function CombosPage() {
           <div className="flex flex-col gap-3">
             {(() => {
               const comboByName = Object.fromEntries(combos.map((c) => [c.name, c.models]));
-              return combos.map((combo) => (
+              if (filteredCombos.length === 0) {
+                return (
+                  <Card>
+                    <div className="text-center py-10">
+                      <p className="text-text-main font-medium mb-1">No combos match Ã¢â‚¬Å“{searchQuery.trim()}Ã¢â‚¬Â</p>
+                      <p className="text-sm text-text-muted mb-4">Try a shorter query, or clear the search to see all {combos.length} combos.</p>
+                      <Button variant="secondary" onClick={() => setSearchQuery("")}>
+                        Clear search
+                      </Button>
+                    </div>
+                  </Card>
+                );
+              }
+              return filteredCombos.map((combo) => (
                 <ComboCard
                   key={combo.id}
                   combo={combo}
@@ -563,25 +633,37 @@ const fmtK = (n) => {
   return `${Math.round(n / 1000)}k`;
 };
 
-function toModelString(m) {
-  if (typeof m === "string") return m;
-  if (m && typeof m === "object") {
-    if (typeof m.value === "string" && m.value.trim()) return m.value.trim();
-    if (typeof m.model === "string" && m.model.trim()) {
-      const p = typeof m.provider === "string" && m.provider.trim() ? m.provider.trim() : "";
-      return p ? `${p}/${m.model.trim()}` : m.model.trim();
-    }
-    if (typeof m.id === "string" && m.id.trim()) return m.id.trim();
-    if (typeof m.name === "string" && m.name.trim()) return m.name.trim();
+function getRouterModelStatus(routerModel, activeProviders) {
+  const effectiveModel = (typeof routerModel === "string" && routerModel.trim())
+    ? routerModel.trim()
+    : "oc/jev-1.13-free";
+  const slashIdx = effectiveModel.indexOf("/");
+  const prefix = slashIdx !== -1 ? effectiveModel.slice(0, slashIdx) : effectiveModel;
+  const providerId = resolveProviderId(prefix);
+  const providerDef = AI_PROVIDERS[providerId];
+  const isNoAuth = !!providerDef?.noAuth;
+
+  if (isNoAuth) {
+    return { ready: true, label: "Ready (Free)", providerId };
   }
-  return "";
+
+  const isConnected = (activeProviders || []).some((c) => c.provider === providerId && c.isActive !== false);
+  if (isConnected) {
+    return { ready: true, label: "Connected", providerId };
+  }
+
+  return { ready: false, label: "Not configured", providerId };
 }
 
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
+  const [showRouterSelect, setShowRouterSelect] = useState(false);
+  const [showPolicyModal, setShowPolicyModal] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
+  const routerModel = strategy.routerModel || "";
   const isFusion = current === "fusion";
+  const isSmart = current === "smart";
   // The synced catalog is server-only, so resolving here would fall back to the
   // generic patterns and under-report the limits. getCaps carries the server's
   // answer for /api/models.
@@ -629,7 +711,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             {comboCaps && (
               <div className="mt-1 flex items-center gap-2 text-[10px] text-text-muted">
                 <span>ctx {fmtK(comboCaps.contextWindow)}</span>
-                <span className="opacity-40">·</span>
+                <span className="opacity-40">Ã‚Â·</span>
                 <span>max {fmtK(comboCaps.maxOutput)}</span>
               </div>
             )}
@@ -643,7 +725,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                   title="Pick the model that fuses panel answers"
                 >
                   <span className="material-symbols-outlined text-[13px]">gavel</span>
-                  <span className="truncate">{judge || `Auto — ${displayModels[0] || "first model"}`}</span>
+                  <span className="truncate">{judge || `Auto Ã¢â‚¬â€ ${displayModels[0] || "first model"}`}</span>
                 </button>
                 {judge && (
                   <button
@@ -656,12 +738,61 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                 )}
               </div>
             )}
+            {/* Smart: System One router picker and policy modal trigger */}
+            {isSmart && (() => {
+              const routerStatus = getRouterModelStatus(routerModel, activeProviders);
+              const policyLabel = getPolicyBadgeLabel(strategy);
+              return (
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-text-muted">Router</span>
+                  <button
+                    onClick={() => setShowRouterSelect(true)}
+                    className="inline-flex max-w-full items-center gap-1 rounded border border-dashed border-primary/40 px-1.5 py-0.5 font-mono text-[11px] text-primary hover:border-primary hover:bg-primary/5 transition-colors"
+                    title="Pick the System One model that decides model routing"
+                  >
+                    <span className="material-symbols-outlined text-[13px]">psychology</span>
+                    <span className="truncate">{routerModel || "Auto Ã¢â‚¬â€ oc/jev-1.13-free"}</span>
+                  </button>
+                  {routerStatus.ready ? (
+                    <Badge variant="success" size="sm" dot>{routerStatus.label}</Badge>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <Badge variant="error" size="sm" dot>{routerStatus.label}</Badge>
+                      <Link
+                        href={`/dashboard/media-providers/systemone/${routerStatus.providerId}`}
+                        className="text-[10px] text-primary hover:underline font-medium"
+                        title="Configure in Media Providers"
+                      >
+                        Configure
+                      </Link>
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setShowPolicyModal(true)}
+                    className="inline-flex items-center gap-1 rounded border border-border/70 bg-black/[0.02] dark:bg-white/[0.02] px-2 py-0.5 text-[11px] text-text-main hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                    title="Configure routing policy and prompt cache retention"
+                  >
+                    <span className="material-symbols-outlined text-[13px] text-text-muted">tune</span>
+                    <span className="font-medium">{policyLabel}</span>
+                  </button>
+                  {routerModel && (
+                    <button
+                      onClick={() => onSetStrategy({ routerModel: "" })}
+                      className="p-0.5 rounded text-text-muted hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                      title="Reset router to Auto"
+                    >
+                      <span className="material-symbols-outlined text-[13px]">close</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
 
         {/* Actions */}
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3 sm:shrink-0">
-          {/* Strategy selector — always visible */}
+          {/* Strategy selector Ã¢â‚¬â€ always visible */}
           <div className="w-full sm:w-[200px]">
             <Select
               options={STRATEGY_OPTIONS}
@@ -712,6 +843,32 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
           title="Select Judge Model"
           addedModelValues={judge ? [judge] : []}
           closeOnSelect={true}
+        />
+      )}
+
+      {/* System One Router model picker (single-select from systemone kind) */}
+      {showRouterSelect && (
+        <ModelSelectModal
+          isOpen={showRouterSelect}
+          onClose={() => setShowRouterSelect(false)}
+          onSelect={(m) => { onSetStrategy({ routerModel: m?.value || "" }); setShowRouterSelect(false); }}
+          activeProviders={activeProviders}
+          title="Select System One Router Model"
+          kindFilter="systemone"
+          addedModelValues={routerModel ? [routerModel] : []}
+          closeOnSelect={true}
+        />
+      )}
+
+      {/* Smart Router Policy Settings Modal */}
+      {showPolicyModal && (
+        <SmartPolicyModal
+          isOpen={showPolicyModal}
+          onClose={() => setShowPolicyModal(false)}
+          comboName={combo.name}
+          currentPolicy={strategy.smartPolicy || (strategy.sessionSticky === false ? "per-turn" : "smart")}
+          currentThreshold={strategy.confidenceThreshold ?? 80}
+          onSave={onSetStrategy}
         />
       )}
     </Card>
@@ -792,7 +949,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <code className="font-mono text-sm font-medium">{cap.label}</code>
-              <span className="text-[10px] text-text-muted">— {cap.desc}</span>
+              <span className="text-[10px] text-text-muted">Ã¢â‚¬â€ {cap.desc}</span>
             </div>
           </div>
         </div>
@@ -927,7 +1084,7 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id });
   const style = {
     transform: CSS.Transform.toString(transform),
-    // no transition — prevents the CSS settle animation fighting React's re-render on drop
+    // no transition Ã¢â‚¬â€ prevents the CSS settle animation fighting React's re-render on drop
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 999 : undefined,
   };

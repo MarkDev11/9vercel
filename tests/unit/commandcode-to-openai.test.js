@@ -21,7 +21,7 @@ function feed(events) {
   return { state, chunks: all };
 }
 
-describe("commandcode-to-openai — text-delta", () => {
+describe("commandcode-to-openai â€” text-delta", () => {
   it("emits assistant role on first delta then content-only", () => {
     const { chunks } = feed([
       { type: "text-delta", text: "Hello" },
@@ -34,7 +34,7 @@ describe("commandcode-to-openai — text-delta", () => {
   });
 });
 
-describe("commandcode-to-openai — reasoning-delta", () => {
+describe("commandcode-to-openai â€” reasoning-delta", () => {
   it("maps reasoning-delta to reasoning_content delta", () => {
     const { chunks } = feed([
       { type: "reasoning-delta", text: "thinking..." },
@@ -43,7 +43,7 @@ describe("commandcode-to-openai — reasoning-delta", () => {
   });
 });
 
-describe("commandcode-to-openai — tool-input-* with id field (live schema)", () => {
+describe("commandcode-to-openai â€” tool-input-* with id field (live schema)", () => {
   it("registers tool index using event.id (NOT toolCallId)", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_X", toolName: "Bash" },
@@ -69,7 +69,7 @@ describe("commandcode-to-openai — tool-input-* with id field (live schema)", (
   });
 });
 
-describe("commandcode-to-openai — final tool-call event", () => {
+describe("commandcode-to-openai â€” final tool-call event", () => {
   it("does NOT re-emit tool_calls when tool-input-* deltas already fired", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_Y", toolName: "Write" },
@@ -92,7 +92,7 @@ describe("commandcode-to-openai — final tool-call event", () => {
   });
 });
 
-describe("commandcode-to-openai — finish", () => {
+describe("commandcode-to-openai â€” finish", () => {
   it("emits a final chunk with finish_reason=tool_calls when finishReason is tool-calls", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_F", toolName: "Bash" },
@@ -115,19 +115,17 @@ describe("commandcode-to-openai — finish", () => {
   });
 });
 
-describe("commandcode-to-openai — error event", () => {
-  it("surfaces object errors as a readable thrown error (not fake content)", () => {
-    // Port 0.5.81: mid-stream errors throw so the stream handler marks the
-    // stream failed and combo/account fallback triggers (092c84ea) instead
-    // of leaking the error text as assistant content.
-    expect(() => feed([
-      { type: "error", error: { type: "server_error", message: "Boom" } },
-    ])).toThrow(/Boom/);
+describe("commandcode-to-openai â€” error event", () => {
+  // Since 092c84ea an error event throws (so the stream is marked errored and can be
+  // retried) instead of being emitted as fake content with finish_reason "stop".
+  it("stringifies object errors so client sees readable message", () => {
+    let message = "";
     try {
       feed([{ type: "error", error: { type: "server_error", message: "Boom" } }]);
-    } catch (e) {
-      expect(e.message).toContain("Boom");
-      expect(e.message).not.toContain("[object Object]");
+    } catch (err) {
+      message = err.message;
     }
+    expect(message).toContain("Boom");
+    expect(message).not.toContain("[object Object]");
   });
 });

@@ -3,7 +3,7 @@
  *
  * Verified live against upstream `/alpha/generate` (curl, 2026-05-07):
  *  - params.system: STRING at top level (Anthropic-style; "system" role NOT in messages[])
- *  - params.messages[*].role ∈ {"user","assistant","tool"}
+ *  - params.messages[*].role âˆˆ {"user","assistant","tool"}
  *  - params.messages[*].content: Array<content_block> (NEVER string)
  *  - tools[*]: Anthropic plain {name, description, input_schema}
  */
@@ -13,7 +13,7 @@ import { openaiToCommandCodeRequest } from "../../open-sse/translator/request/op
 
 const MODEL = "moonshotai/Kimi-K2.6";
 
-describe("openaiToCommandCodeRequest — basic envelope", () => {
+describe("openaiToCommandCodeRequest â€” basic envelope", () => {
   it("returns the expected top-level envelope shape", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hi" }],
@@ -28,7 +28,7 @@ describe("openaiToCommandCodeRequest — basic envelope", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest — system handling", () => {
+describe("openaiToCommandCodeRequest â€” system handling", () => {
   it("hoists system messages to params.system (string), not messages[]", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -63,7 +63,7 @@ describe("openaiToCommandCodeRequest — system handling", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest — content shape", () => {
+describe("openaiToCommandCodeRequest â€” content shape", () => {
   it("MUST always emit content as Array (never string) for user", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hello" }],
@@ -87,7 +87,7 @@ describe("openaiToCommandCodeRequest — content shape", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest — tool role / tool-result (AI SDK)", () => {
+describe("openaiToCommandCodeRequest â€” tool role / tool-result (AI SDK)", () => {
   it("converts role:\"tool\" to role:\"tool\" with tool-result block; output is {type:\"text\",value}", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -113,7 +113,7 @@ describe("openaiToCommandCodeRequest — tool role / tool-result (AI SDK)", () =
   });
 });
 
-describe("openaiToCommandCodeRequest — assistant tool_calls / tool-call", () => {
+describe("openaiToCommandCodeRequest â€” assistant tool_calls / tool-call", () => {
   it("converts assistant.tool_calls[] into content blocks of type tool-call", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -138,7 +138,7 @@ describe("openaiToCommandCodeRequest — assistant tool_calls / tool-call", () =
   });
 });
 
-describe("openaiToCommandCodeRequest — tools schema conversion", () => {
+describe("openaiToCommandCodeRequest â€” tools schema conversion", () => {
   it("converts OpenAI {type:\"function\", function:{...}} to Anthropic plain {name, input_schema}", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hi" }],
@@ -180,7 +180,7 @@ describe("openaiToCommandCodeRequest — tools schema conversion", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest — native image blocks", () => {
+describe("openaiToCommandCodeRequest â€” native image blocks", () => {
   const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const DATA_URI = `data:image/png;base64,${PNG_B64}`;
 
@@ -197,7 +197,7 @@ describe("openaiToCommandCodeRequest — native image blocks", () => {
 
     expect(out.params.messages[0].content).toEqual([
       { type: "text", text: "what color?" },
-      { type: "image", image: DATA_URI, mediaType: "image/png", mimeType: "image/png" },
+      { type: "image", image: DATA_URI, mimeType: "image/png", mediaType: "image/png" },
     ]);
   });
 
@@ -212,7 +212,7 @@ describe("openaiToCommandCodeRequest — native image blocks", () => {
     }, true);
 
     expect(out.params.messages[0].content).toEqual([
-      { type: "image", image: DATA_URI, mediaType: "image/png", mimeType: "image/png" },
+      { type: "image", image: DATA_URI, mimeType: "image/png", mediaType: "image/png" },
     ]);
   });
 

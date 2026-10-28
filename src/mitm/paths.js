@@ -46,5 +46,6 @@ try { _dir = getDataDir(); } catch (e) {
 }
 const DATA_DIR = _dir;
 const MITM_DIR = path.join(DATA_DIR, "mitm");
+try { fs.mkdirSync(MITM_DIR, { recursive: true }); } catch {}
 
 module.exports = { DATA_DIR, MITM_DIR };
