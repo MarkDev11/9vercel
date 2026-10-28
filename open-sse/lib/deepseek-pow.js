@@ -2,7 +2,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
-import { findDeepSeekPowNonce, MAX_DEEPSEEK_POW_DIFFICULTY } from "./deepseek-pow-hash.js";
+// `.mjs` — the worker script and this module are loaded as raw files at
+// runtime (worker_threads), so they must be unambiguously ESM. The repo root
+// package.json has no "type": "module", so a bare ".js" would be parsed as
+// CommonJS on the serverless runtime.
+import { findDeepSeekPowNonce, MAX_DEEPSEEK_POW_DIFFICULTY } from "./deepseek-pow-hash.mjs";
 
 const DEEPSEEK_POW_ALGORITHM = "DeepSeekHashV1";
 const SHA3_256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
@@ -60,12 +64,32 @@ function solveSynchronously(validated) {
 // bundle freezes import.meta.url to the build-machine path, leaving an
 // import.meta.url-relative fallback silently dead in production. A single
 // non-branching cwd-relative path avoids both problems.
-function resolveWorkerPath() {
-  const workerPath = path.join(process.cwd(), "open-sse/lib/deepseek-pow-worker.mjs");
-  if (!existsSync(workerPath)) {
-    throw new Error(`DeepSeek PoW worker script not found at ${workerPath}`);
+//
+// The upward walk is only a fallback for the cases where cwd is not the app
+// root (the test runner runs from tests/), so the deployed path stays exactly
+// as before.
+const WORKER_RELATIVE_PATH = path.join("open-sse", "lib", "deepseek-pow-worker.mjs");
+
+function findWorkerFromAncestors(startDir) {
+  let dir = startDir;
+  for (let depth = 0; depth < 6; depth++) {
+    const candidate = path.join(dir, WORKER_RELATIVE_PATH);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
-  return workerPath;
+  return null;
+}
+
+function resolveWorkerPath() {
+  const workerPath = path.join(process.cwd(), WORKER_RELATIVE_PATH);
+  if (existsSync(workerPath)) return workerPath;
+
+  const fromAncestors = findWorkerFromAncestors(process.cwd());
+  if (fromAncestors) return fromAncestors;
+
+  throw new Error(`DeepSeek PoW worker script not found at ${workerPath}`);
 }
 
 function solveInWorker(validated, options = {}) {

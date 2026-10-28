@@ -37,6 +37,18 @@ export function copyStandaloneAssets({ projectRoot = process.cwd(), distDir = pr
     cpSync(serverWrapperSource, serverWrapperDestination, { force: true });
     console.log(`[standalone-assets] Copied custom-server.js to ${serverWrapperDestination}`);
   }
+
+  // The DeepSeek web PoW worker is spawned from a raw path (worker_threads),
+  // so the file tracer only picks up the worker script and never the sibling
+  // hash module it imports — the runtime then fails with
+  // "Cannot find module '/var/task/open-sse/lib/deepseek-pow-hash.mjs'".
+  // Copy the pair explicitly so the standalone bundle is self-contained.
+  const powLibSource = resolve(projectRoot, "open-sse", "lib");
+  const powLibDestination = resolve(standaloneDir, "open-sse", "lib");
+  if (existsSync(powLibSource)) {
+    cpSync(powLibSource, powLibDestination, { recursive: true, force: true });
+    console.log(`[standalone-assets] Copied open-sse/lib PoW assets to ${powLibDestination}`);
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(dirname(fileURLToPath(import.meta.url)), "copy-standalone-assets.mjs")) {

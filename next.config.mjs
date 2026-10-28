@@ -41,10 +41,18 @@ const nextConfig = {
   // package AND its platform-specific native binding must ship. The binding
   // is an optionalDependency of wreq-js with a per-platform name, so it is
   // listed explicitly here.
+  //
+  // Fork note (Vercel): open-sse/lib/deepseek-pow-worker.mjs is loaded at
+  // runtime through worker_threads (a raw file path, not a module import), so
+  // the tracer only sees the worker itself — never the sibling it imports.
+  // Without the hash module next to it, every DeepSeek web request fails with
+  // "Cannot find module '/var/task/open-sse/lib/deepseek-pow-hash.mjs'".
   outputFileTracingIncludes: {
     "/*": [
       "./node_modules/wreq-js/**/*",
       "./node_modules/@wreq-js/binding-*/**/*",
+      "./open-sse/lib/deepseek-pow-worker.mjs",
+      "./open-sse/lib/deepseek-pow-hash.mjs",
     ],
   },
   outputFileTracingExcludes: {

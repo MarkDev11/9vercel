@@ -59,9 +59,10 @@ npx vitest run unit/capabilities.test.js  # single file (path relative to tests/
 ## Runtime-only deps (Vercel serverless)
 
 - `wreq-js` (TLS impersonation) and `playwright-core` are loaded through `open-sse/services/lazyRuntime.js`, i.e. a **runtime-only dynamic import** — Next's file tracing cannot see it.
-- `wreq-js` therefore lives in `optionalDependencies` (not devDependencies) and `next.config.mjs` lists it plus its per-platform native binding under `outputFileTracingIncludes`. Moving it back to devDependencies silently drops it from the deployed bundle.
+- `wreq-js` therefore lives in `optionalDependencies` (not devDependencies) and `next.config.mjs` lists it plus its per-platform native binding under `outputFileTracingIncludes`. Moving it back to devDependencies silently drops it from the deployed bundle. In `wreq-js`, `proxy` is a sibling of `emulation` inside `createSessionOptions`.
+- **Worker threads & raw file paths**: scripts spawned via `new Worker(path)` (like `open-sse/lib/deepseek-pow-worker.mjs`) are loaded from raw disk paths, so Next's file tracer only traces the entry point and misses siblings it imports (e.g. `deepseek-pow-hash.mjs`). Both must be listed in `outputFileTracingIncludes` and use `.mjs` extensions so Node treats them as ESM on the serverless runtime.
 - **Never use `createRequire` from `node:module` in bundled server code**: webpack replaces it with an empty CJS stub whose `.resolve` is `undefined` ("Cannot read properties of undefined (reading 'resolve')"). Use `process.getBuiltinModule("module").createRequire` — `process` is a real global and is never stubbed — or `import.meta.resolve`.
-- The OpenCode free tier and the web providers gate on the TLS ClientHello: a native Node fetch is refused (429/403) even when the body is faithful. Any probe for those providers must go through `open-sse/services/opencodeTlsClient.js`, not a plain `fetch`. The free tier lives under `/inference/v1` now; the old `/zen/v1` path is dead.
+- The OpenCode free tier and the web providers gate on the TLS ClientHello: a native Node fetch is refused (429/403) even when the body is faithful. Any probe for those providers must go through `open-sse/services/opencodeTlsClient.js`, not a plain `fetch`. The free tier lives under `/inference/v1` now; the old `/zen/v1` path is dead. When proxies are active, `directFetchHandlesProxy: true` routes through `opencodeTlsFetch` so the TLS ClientHello survives the proxy tunnel.
 
 ## Request flow
 
