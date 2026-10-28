@@ -266,6 +266,31 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
     expect(second._opencodeSession).toBe(first._opencodeSession);
   });
 
+  it("ignores synthetic binary-style sessionSeeds from chatCore so requests keep a stable session", () => {
+    const executor = getExecutor("opencode");
+    const body = { messages: [{ role: "user", content: "hello" }] };
+    // chatCore seeds providerSessionId with randomUUID + Date.now() when no client hints exist.
+    const syntheticSeed1 = "18198049-1cf3-4c82-bded-90bdf13a6aa51793172863963";
+    const syntheticSeed2 = "3e245631-18da-43c6-9327-65fdf888f3e21793172863966";
+
+    const first = executor.prepareRequestCredentials({
+      body,
+      credentials: anonymousCredentials("user-with-seed"),
+      providerSessionId: syntheticSeed1,
+      clientTool: "claude",
+    });
+    const second = executor.prepareRequestCredentials({
+      body,
+      credentials: anonymousCredentials("user-with-seed"),
+      providerSessionId: syntheticSeed2,
+      clientTool: "claude",
+    });
+
+    expect(first._opencodeSession).toMatch(OPENCODE_SESSION_RE);
+    // Both requests must share the same stable session rather than minting fresh sessions.
+    expect(second._opencodeSession).toBe(first._opencodeSession);
+  });
+
   it("isolates stable sessions by downstream identity", () => {
     const executor = getExecutor("opencode");
     const body = { messages: [{ role: "user", content: "hello" }] };

@@ -142,9 +142,21 @@ const stableSessionCleanup = setInterval(() => {
 }, MEMORY_CONFIG.sessionCleanupIntervalMs);
 if (stableSessionCleanup.unref) stableSessionCleanup.unref();
 
+// chatCore seeds providerSessionId with resolveSessionId(). When a client has
+// no session headers/hints and the connection is noauth/unset, resolveSessionId
+// returns a one-shot binary-style id: randomUUID + Date.now(). Treating that
+// synthetic seed as a client hint mints a fresh OpenCode session on every
+// request, which burns through the free tier and triggers 429 FreeUsageLimitError.
+const BINARY_STYLE_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\d{10,16}$/i;
+
+function isSyntheticSessionSeed(value) {
+  if (typeof value !== "string") return false;
+  return BINARY_STYLE_SESSION_RE.test(value.trim());
+}
+
 function identityKey(credentials) {
   const connectionId = credentials?.connectionId || credentials?.id;
-  if (connectionId) return `opencode:conn:${String(connectionId).slice(0, 128)}`;
+  if (connectionId && connectionId !== "noauth") return `opencode:conn:${String(connectionId).slice(0, 128)}`;
   const raw = credentials?.rawHeaders || {};
   const auth = raw.authorization || raw.Authorization || raw["x-api-key"] || raw["X-Api-Key"] || "";
   if (auth) {
@@ -230,18 +242,21 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
     }
   }
 
-  const hinted = incoming || normalizeSession(providerSessionId);
+  const clientHint = isSyntheticSessionSeed(providerSessionId) ? null : normalizeSession(providerSessionId);
+  const hinted = incoming || clientHint;
   if (hinted) return translateSessionId(hinted, clientTool);
 
-  if (credentials?.connectionId || bodyHasSessionHints(body)) {
+  const hasSpecificConn = credentials?.connectionId && credentials?.connectionId !== "noauth";
+  if (hasSpecificConn || bodyHasSessionHints(body)) {
     let viaManager = null;
     try {
       viaManager = resolveSessionId({
         headers,
         body,
-        connectionId: credentials?.connectionId,
+        connectionId: hasSpecificConn ? credentials?.connectionId : undefined,
         scope: "opencode",
       });
+      if (isSyntheticSessionSeed(viaManager)) viaManager = null;
     } catch {
       viaManager = null;
     }
@@ -410,18 +425,21 @@ export class OpenCodeExecutor extends BaseExecutor {
   // The free gate keys on the TLS ClientHello, so a native Node fetch is refused
   // no matter how faithful the body is. Route through the impersonating client
   // and keep proxy handling on the existing path (proxyAwareFetch delegates to
-  // `directFetch` when no proxy is configured). Fail-open: without wreq-js the
-  // request still goes out on native fetch instead of erroring here.
+  // `directFetch` when no proxy is configured; when one is, directFetch is told
+  // to carry the proxy itself so the ClientHello survives the tunnel). Fail-open:
+  // without wreq-js the request still goes out on native fetch instead of
+  // erroring here.
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
     return super.execute({
       ...args,
       credentials,
-      directFetch: (url, options) => opencodeTlsFetch(url, {
+      directFetchHandlesProxy: true,
+      directFetch: (url, options, { proxyUrl } = {}) => opencodeTlsFetch(url, {
         method: options.method,
         headers: options.headers,
         body: options.body,
-      }, { signal: options.signal }),
+      }, { signal: options.signal, proxyUrl: proxyUrl || null }),
     });
   }
 

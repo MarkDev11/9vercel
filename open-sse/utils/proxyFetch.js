@@ -255,7 +255,15 @@ async function fetchWithTlsFallback(url, options, proxyUrl) {
   try {
     // Protocol adapters may need Node's HTTP/1 transport on the direct path.
     // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
-    if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
+    if (options.directFetch) {
+      if (!proxyUrl) return await options.directFetch(url, options);
+      // The adapter opted into proxying itself (e.g. opencode's TLS client:
+      // wreq-js takes `proxy` at session creation and keeps the impersonated
+      // ClientHello, which undici's ProxyAgent would drop).
+      if (options.directFetchHandlesProxy === true) {
+        return await options.directFetch(url, options, { proxyUrl });
+      }
+    }
     const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
     return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
   } catch (err) {

@@ -37,8 +37,6 @@ const OPENCODE_CIPHER_LIST = [
 
 const DEFAULT_TIMEOUT_MS = 120000;
 
-let sessionPromise = null;
-
 export class OpencodeTlsUnavailableError extends Error {
   constructor(message) {
     super(message);
@@ -46,29 +44,61 @@ export class OpencodeTlsUnavailableError extends Error {
   }
 }
 
-async function loadSession() {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
+// Sessions are cached per proxy key: wreq-js only accepts `proxy` at session
+// creation (session-scoped field — per-request overrides need a `transport`),
+// so a rotating proxy pool needs one session per proxy URL. Resetting the
+// session on HTTP 429 lets the next attempt dial a fresh connection through
+// the pool — a fresh exit IP for rotating upstreams — and self-heal.
+const sessionCache = new Map();
+
+function sessionKey(proxyUrl) {
+  return typeof proxyUrl === "string" && proxyUrl ? `proxy:${proxyUrl}` : "direct";
+}
+
+function buildSessionOptions(proxyUrl) {
+  const options = {
+    emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } },
+  };
+  // `proxy` must sit beside `emulation`, never inside it — wreq-js treats it as
+  // a sibling CreateSessionOptions field.
+  if (proxyUrl) options.proxy = proxyUrl;
+  return options;
+}
+
+function loadSession(proxyUrl) {
+  const key = sessionKey(proxyUrl);
+  if (!sessionCache.has(key)) {
+    const pending = (async () => {
       const wreq = await loadRuntimeDep("wreq-js");
       if (typeof wreq.createSession !== "function") {
         throw new Error("wreq-js runtime is missing createSession");
       }
-      return wreq.createSession({
-        emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } },
-      });
+      return wreq.createSession(buildSessionOptions(proxyUrl));
     })().catch((error) => {
-      sessionPromise = null;
+      sessionCache.delete(key);
       throw error;
     });
+    sessionCache.set(key, pending);
   }
-  return sessionPromise;
+  return sessionCache.get(key);
 }
 
-/** Drop the cached session so the next call builds a fresh one. */
-export function resetOpencodeTlsSession() {
-  const pending = sessionPromise;
-  sessionPromise = null;
-  pending?.then((session) => session.close?.()).catch(() => {});
+/** Drop the cached session(s) so the next call builds a fresh one. */
+export function resetOpencodeTlsSession(proxyUrl = null) {
+  const keys = proxyUrl ? [sessionKey(proxyUrl)] : [...sessionCache.keys()];
+  for (const key of keys) {
+    const pending = sessionCache.get(key);
+    sessionCache.delete(key);
+    pending?.then((session) => session.close?.()).catch(() => {});
+  }
+}
+
+function headersOf(res) {
+  const headers = {};
+  res.headers?.forEach?.((value, key) => {
+    headers[key] = value;
+  });
+  return headers;
 }
 
 /**
@@ -77,11 +107,18 @@ export function resetOpencodeTlsSession() {
  *
  * Streaming is preserved: the response body is handed over as the live
  * ReadableStream, never buffered.
+ *
+ * `proxyUrl` routes the request through an HTTP/SOCKS proxy at the session
+ * level, keeping the impersonated ClientHello on the proxy path (undici's
+ * ProxyAgent dials the tunnel itself, which loses the fingerprint and is
+ * refused with 429 FreeUsageLimitError). A 429 additionally drops the cached
+ * session so the next request reconnects — self-healing through rotating
+ * proxy pools — and the request is retried once on a fresh session.
  */
-export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS, proxyUrl = null, retryOn429 = true } = {}) {
   let session;
   try {
-    session = await loadSession();
+    session = await loadSession(proxyUrl);
   } catch (error) {
     throw new OpencodeTlsUnavailableError(
       `wreq-js unavailable (${error instanceof Error ? error.message : "unknown"}) — install the optional wreq-js dependency to reach the OpenCode free tier`
@@ -98,11 +135,22 @@ export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEF
   if (signal) options.signal = signal;
 
   const res = await session.fetch(url, options);
-  const headers = {};
-  res.headers?.forEach?.((value, key) => {
-    headers[key] = value;
-  });
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+
+  if (res.status === 429) {
+    // Drain the (small) error body so the connection can be torn down cleanly.
+    await res.text?.().catch?.(() => {});
+    resetOpencodeTlsSession(proxyUrl);
+    if (retryOn429 && signal && !signal.aborted) {
+      try {
+        return await opencodeTlsFetch(url, init, { signal, timeoutMs, proxyUrl, retryOn429: false });
+      } catch {
+        // Retry path failed (e.g. wreq-js dropped out) — surface the 429.
+      }
+    }
+    return new Response("", { status: res.status, statusText: res.statusText, headers: headersOf(res) });
+  }
+
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: headersOf(res) });
 }
 
-export const __test__ = { OPENCODE_CIPHER_LIST };
+export const __test__ = { OPENCODE_CIPHER_LIST, sessionCache, buildSessionOptions, sessionKey };
