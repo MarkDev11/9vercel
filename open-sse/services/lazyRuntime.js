@@ -110,12 +110,24 @@ async function installIntoRuntime(pkg, version) {
 
 const inflight = new Map();
 
+// Importing a CJS entry via file URL bypasses the exports map, and
+// cjs-module-lexer cannot detect named exports through chained re-exports
+// (`module.exports = require('./coreBundle').inprocess.playwright`), so
+// consumers destructuring `{ chromium }` get undefined. Merge `default`'s
+// own properties as a fallback.
+function unwrapCjsNamespace(mod) {
+  if (mod?.default && typeof mod.default === "object") {
+    return { ...mod.default, ...mod };
+  }
+  return mod;
+}
+
 async function load(pkg) {
   // 1) Resolvable from the app install (dev machine / traced standalone).
   const appUrl = resolvePackageUrl(pkg);
   if (appUrl) {
     try {
-      return await import(/* webpackIgnore: true */ appUrl);
+      return unwrapCjsNamespace(await import(/* webpackIgnore: true */ /* @vite-ignore */ appUrl));
     } catch (error) {
       if (!isModuleMissing(error)) throw error;
     }
@@ -124,19 +136,19 @@ async function load(pkg) {
   const runtimeUrl = resolvePackageUrl(pkg, path.join(getRuntimeDir(), "package.json"));
   if (runtimeUrl) {
     try {
-      return await import(/* webpackIgnore: true */ runtimeUrl);
+      return unwrapCjsNamespace(await import(/* webpackIgnore: true */ /* @vite-ignore */ runtimeUrl));
     } catch (error) {
       if (!isModuleMissing(error)) throw error;
     }
   }
   // 3) Download on demand, then import from the runtime dir.
   const version = LAZY_DEP_VERSIONS[pkg] || "latest";
-  const runtimeImport = () => {
+  const runtimeImport = async () => {
     const url = resolvePackageUrl(pkg, path.join(getRuntimeDir(), "package.json"));
     if (!url) {
       throw new Error(`${pkg} could not be resolved from "${getRuntimeDir()}" after install`);
     }
-    return import(/* webpackIgnore: true */ url);
+    return unwrapCjsNamespace(await import(/* webpackIgnore: true */ /* @vite-ignore */ url));
   };
   await installIntoRuntime(pkg, version);
   try {

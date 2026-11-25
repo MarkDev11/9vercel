@@ -21,7 +21,7 @@ function feed(events) {
   return { state, chunks: all };
 }
 
-describe("commandcode-to-openai â€” text-delta", () => {
+describe("commandcode-to-openai — text-delta", () => {
   it("emits assistant role on first delta then content-only", () => {
     const { chunks } = feed([
       { type: "text-delta", text: "Hello" },
@@ -34,7 +34,7 @@ describe("commandcode-to-openai â€” text-delta", () => {
   });
 });
 
-describe("commandcode-to-openai â€” reasoning-delta", () => {
+describe("commandcode-to-openai — reasoning-delta", () => {
   it("maps reasoning-delta to reasoning_content delta", () => {
     const { chunks } = feed([
       { type: "reasoning-delta", text: "thinking..." },
@@ -43,7 +43,7 @@ describe("commandcode-to-openai â€” reasoning-delta", () => {
   });
 });
 
-describe("commandcode-to-openai â€” tool-input-* with id field (live schema)", () => {
+describe("commandcode-to-openai — tool-input-* with id field (live schema)", () => {
   it("registers tool index using event.id (NOT toolCallId)", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_X", toolName: "Bash" },
@@ -69,7 +69,7 @@ describe("commandcode-to-openai â€” tool-input-* with id field (live schema
   });
 });
 
-describe("commandcode-to-openai â€” final tool-call event", () => {
+describe("commandcode-to-openai — final tool-call event", () => {
   it("does NOT re-emit tool_calls when tool-input-* deltas already fired", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_Y", toolName: "Write" },
@@ -92,7 +92,7 @@ describe("commandcode-to-openai â€” final tool-call event", () => {
   });
 });
 
-describe("commandcode-to-openai â€” finish", () => {
+describe("commandcode-to-openai — finish", () => {
   it("emits a final chunk with finish_reason=tool_calls when finishReason is tool-calls", () => {
     const { chunks } = feed([
       { type: "tool-input-start", id: "call_F", toolName: "Bash" },
@@ -113,9 +113,30 @@ describe("commandcode-to-openai â€” finish", () => {
     const last = chunks[chunks.length - 1];
     expect(last.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
   });
+
+  it("extracts cache details when inputTokenDetails is provided", () => {
+    const { chunks } = feed([
+      { type: "text-delta", text: "hi cached" },
+      {
+        type: "finish",
+        totalUsage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          inputTokenDetails: { cacheReadTokens: 80, cacheWriteTokens: 10 },
+        },
+      },
+    ]);
+    const last = chunks[chunks.length - 1];
+    expect(last.usage.prompt_tokens).toBe(100);
+    expect(last.usage.completion_tokens).toBe(20);
+    expect(last.usage.prompt_tokens_details).toEqual({
+      cached_tokens: 80,
+      cache_creation_tokens: 10,
+    });
+  });
 });
 
-describe("commandcode-to-openai â€” error event", () => {
+describe("commandcode-to-openai — error event", () => {
   // Since 092c84ea an error event throws (so the stream is marked errored and can be
   // retried) instead of being emitted as fake content with finish_reason "stop".
   it("stringifies object errors so client sees readable message", () => {

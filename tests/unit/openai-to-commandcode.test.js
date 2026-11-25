@@ -3,7 +3,7 @@
  *
  * Verified live against upstream `/alpha/generate` (curl, 2026-05-07):
  *  - params.system: STRING at top level (Anthropic-style; "system" role NOT in messages[])
- *  - params.messages[*].role âˆˆ {"user","assistant","tool"}
+ *  - params.messages[*].role ∈ {"user","assistant","tool"}
  *  - params.messages[*].content: Array<content_block> (NEVER string)
  *  - tools[*]: Anthropic plain {name, description, input_schema}
  */
@@ -13,7 +13,7 @@ import { openaiToCommandCodeRequest } from "../../open-sse/translator/request/op
 
 const MODEL = "moonshotai/Kimi-K2.6";
 
-describe("openaiToCommandCodeRequest â€” basic envelope", () => {
+describe("openaiToCommandCodeRequest — basic envelope", () => {
   it("returns the expected top-level envelope shape", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hi" }],
@@ -28,7 +28,7 @@ describe("openaiToCommandCodeRequest â€” basic envelope", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest â€” system handling", () => {
+describe("openaiToCommandCodeRequest — system handling", () => {
   it("hoists system messages to params.system (string), not messages[]", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -63,7 +63,7 @@ describe("openaiToCommandCodeRequest â€” system handling", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest â€” content shape", () => {
+describe("openaiToCommandCodeRequest — content shape", () => {
   it("MUST always emit content as Array (never string) for user", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hello" }],
@@ -87,7 +87,7 @@ describe("openaiToCommandCodeRequest â€” content shape", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest â€” tool role / tool-result (AI SDK)", () => {
+describe("openaiToCommandCodeRequest — tool role / tool-result (AI SDK)", () => {
   it("converts role:\"tool\" to role:\"tool\" with tool-result block; output is {type:\"text\",value}", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -111,9 +111,133 @@ describe("openaiToCommandCodeRequest â€” tool role / tool-result (AI SDK)",
     expect(block.toolName).toBe("do_x");
     expect(block.output).toEqual({ type: "text", value: "RESULT_OK" });
   });
+
+  it("resolves toolName from prior assistant tool_calls when name is omitted (Claude Code & OpenAI SDK standard)", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [
+        { role: "user", content: "read file" },
+        {
+          role: "assistant",
+          content: "Let me check",
+          tool_calls: [
+            { id: "toolu_read_1", type: "function", function: { name: "Read", arguments: "{\"path\":\"a.txt\"}" } },
+          ],
+        },
+        // Real-world Claude Code / OpenAI client turn: tool name is NOT sent on role: "tool"
+        { role: "tool", tool_call_id: "toolu_read_1", content: "FILE_CONTENT" },
+      ],
+    }, true);
+
+    const toolMsg = out.params.messages[out.params.messages.length - 1];
+    expect(toolMsg.role).toBe("tool");
+    const block = toolMsg.content[0];
+    expect(block.toolCallId).toBe("toolu_read_1");
+    expect(block.toolName).toBe("Read");
+    expect(block.output).toEqual({ type: "text", value: "FILE_CONTENT" });
+  });
+
+  it("emits error-text output type when is_error is true", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [
+        { role: "user", content: "run command" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_bash_1", type: "function", function: { name: "Bash", arguments: "{\"command\":\"exit 1\"}" } },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_bash_1", content: "Command failed: exit 1", is_error: true },
+      ],
+    }, true);
+
+    const toolMsg = out.params.messages[out.params.messages.length - 1];
+    const block = toolMsg.content[0];
+    expect(block.toolName).toBe("Bash");
+    expect(block.output).toEqual({ type: "error-text", value: "Command failed: exit 1" });
+  });
 });
 
-describe("openaiToCommandCodeRequest â€” assistant tool_calls / tool-call", () => {
+describe("openaiToCommandCodeRequest — assistant reasoning handling", () => {
+  it("does not inject empty reasoning block when assistant has tool_calls but no reasoning", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: "I will call a tool",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "test", arguments: "{}" } },
+          ],
+        },
+      ],
+    }, true);
+
+    const asst = out.params.messages[1];
+    const reasoning = asst.content.find((b) => b.type === "reasoning");
+    expect(reasoning).toBeUndefined();
+  });
+
+  it("preserves actual reasoning_content when present", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [
+        { role: "user", content: "think" },
+        {
+          role: "assistant",
+          reasoning_content: "Step 1: analyze problem",
+          content: "Here is the answer",
+        },
+      ],
+    }, true);
+
+    const asst = out.params.messages[1];
+    const reasoning = asst.content.find((b) => b.type === "reasoning");
+    expect(reasoning).toBeDefined();
+    expect(reasoning.text).toBe("Step 1: analyze problem");
+  });
+});
+
+describe("openaiToCommandCodeRequest — defaults & envelope", () => {
+  it("defaults max_tokens to 64000 matching official CLI", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [{ role: "user", content: "hi" }],
+    }, true);
+
+    expect(out.params.max_tokens).toBe(64000);
+    expect(out.memory).toBeNull();
+    expect(out.taste).toBeNull();
+    expect(out.skills).toBeNull();
+    expect(out.permissionMode).toBe("standard");
+  });
+
+  it("preserves client max_tokens when specified", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 16384,
+    }, true);
+
+    expect(out.params.max_tokens).toBe(16384);
+  });
+
+  it("forwards reasoning_effort inside params", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "high",
+    }, true);
+
+    expect(out.params.reasoning_effort).toBe("high");
+  });
+
+  it("extracts effort from Claude output_config.effort", () => {
+    const out = openaiToCommandCodeRequest(MODEL, {
+      messages: [{ role: "user", content: "hi" }],
+      output_config: { effort: "max" },
+    }, true);
+
+    expect(out.params.reasoning_effort).toBe("max");
+  });
+});
+
+describe("openaiToCommandCodeRequest — assistant tool_calls / tool-call", () => {
   it("converts assistant.tool_calls[] into content blocks of type tool-call", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [
@@ -138,7 +262,7 @@ describe("openaiToCommandCodeRequest â€” assistant tool_calls / tool-call",
   });
 });
 
-describe("openaiToCommandCodeRequest â€” tools schema conversion", () => {
+describe("openaiToCommandCodeRequest — tools schema conversion", () => {
   it("converts OpenAI {type:\"function\", function:{...}} to Anthropic plain {name, input_schema}", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{ role: "user", content: "hi" }],
@@ -180,7 +304,7 @@ describe("openaiToCommandCodeRequest â€” tools schema conversion", () => {
   });
 });
 
-describe("openaiToCommandCodeRequest â€” native image blocks", () => {
+describe("openaiToCommandCodeRequest — native image blocks", () => {
   const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const DATA_URI = `data:image/png;base64,${PNG_B64}`;
 

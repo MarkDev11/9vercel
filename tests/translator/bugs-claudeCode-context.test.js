@@ -1,4 +1,4 @@
-// Real Claude Code CLI requests (Claude format) â†’ non-Claude provider via OpenAI bridge.
+// Real Claude Code CLI requests (Claude format) → non-Claude provider via OpenAI bridge.
 // Focuses on context components a real CLI sends: system arrays w/ cache_control, thinking
 // signatures, tool_result with images, audio. KNOWN BUG = it.fails (source file:line in comments).
 import { describe, it, expect } from "vitest";
@@ -9,8 +9,8 @@ import { FORMATS } from "../../open-sse/translator/formats.js";
 const T = (src, tgt, body, provider = null) =>
   translateRequest(src, tgt, "m", body, true, null, provider);
 
-describe("Claude Code CLI context â†’ OpenAI", () => {
-  // claude-to-openai.js:24-27 â€” system array only maps .text; cache_control/non-text dropped
+describe("Claude Code CLI context → OpenAI", () => {
+  // claude-to-openai.js:24-27 — system array only maps .text; cache_control/non-text dropped
   it("system array keeps all text parts", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
       system: [
@@ -24,9 +24,9 @@ describe("Claude Code CLI context â†’ OpenAI", () => {
     expect(sys?.content).toContain("repo conventions");
   });
 
-  // claudeâ†’claude is passthrough (same format) â†’ thinking preserved. Guards against
+  // claude→claude is passthrough (same format) → thinking preserved. Guards against
   // accidental routing through the OpenAI bridge for same-format requests.
-  it("assistant thinking block survives Claudeâ†’Claude passthrough", () => {
+  it("assistant thinking block survives Claude→Claude passthrough", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.CLAUDE, {
       messages: [
         { role: "assistant", content: [
@@ -39,7 +39,7 @@ describe("Claude Code CLI context â†’ OpenAI", () => {
     expect(JSON.stringify(out)).toContain("step-by-step plan");
   });
 
-  // claude-to-openai.js:128 â€” redacted_thinking also dropped
+  // claude-to-openai.js:128 — redacted_thinking also dropped
   // KNOWN BUG
   it.fails("redacted_thinking block is not silently dropped", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
@@ -54,7 +54,7 @@ describe("Claude Code CLI context â†’ OpenAI", () => {
     expect(JSON.stringify(out)).toContain("ENCRYPTED_BLOB");
   });
 
-  // claude-to-openai.js:155-173 â€” tool_result image block stringified into raw JSON
+  // claude-to-openai.js:155-173 — tool_result image block stringified into raw JSON
   // KNOWN BUG
   // Fixed in f4f06f29 ("keep tool-result images"): now a regression test.
   it("tool_result image block is preserved", () => {
@@ -70,5 +70,39 @@ describe("Claude Code CLI context â†’ OpenAI", () => {
     });
     const tool = out.messages.find((m) => m.role === "tool");
     expect(tool?.content, "image turned into raw JSON").not.toMatch(/^\[/);
+  });
+
+  it("forwards Claude output_config.effort to CommandCode params.reasoning_effort", () => {
+    for (const eff of ["low", "medium", "high", "max"]) {
+      const out = translateRequest(
+        FORMATS.CLAUDE,
+        FORMATS.COMMANDCODE,
+        "deepseek/deepseek-v4.1-flash",
+        {
+          output_config: { effort: eff },
+          messages: [{ role: "user", content: "hi" }],
+        },
+        true,
+        null,
+        "commandcode"
+      );
+      expect(out.params.reasoning_effort).toBe(eff);
+    }
+  });
+
+  it("handles Claude adaptive thinking mapping to high effort", () => {
+    const out = translateRequest(
+      FORMATS.CLAUDE,
+      FORMATS.COMMANDCODE,
+      "deepseek/deepseek-v4.1-flash",
+      {
+        thinking: { type: "adaptive" },
+        messages: [{ role: "user", content: "hi" }],
+      },
+      true,
+      null,
+      "commandcode"
+    );
+    expect(out.params.reasoning_effort).toBe("high");
   });
 });
