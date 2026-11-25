@@ -1690,7 +1690,7 @@ Notes:
 
 ## 🛠️ Tech Stack
 
-- **Runtime**: Node.js 20+
+- **Runtime**: Node.js 20.18.1+ (22 LTS recommended)
 - **Framework**: Next.js 16
 - **UI**: React 19 + Tailwind CSS 4
 - **Database**: Supabase Postgres (`postgres`/postgres.js via `DATABASE_URL`) on Vercel; SQLite (better-sqlite3 / node:sqlite / sql.js fallback) locally

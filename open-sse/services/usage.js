@@ -21,10 +21,12 @@ import { getGroqUsage } from "./usage/groq.js";
 import { getZedUsage } from "./usage/zed.js";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
 import { getCursorUsage } from "./usage/cursor.js";
+import { getClinepassUsage } from "./usage/clinepass.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import { getGlmUsage } from "./usage/glm.js";
 import { getCommandCodeUsage } from "./usage/commandcode.js";
 import { getFreebuffUsage } from "./usage/freebuff.js";
+import { getSyntheticUsage } from "./usage/synthetic.js";
 import {
   getIflowUsage,
   getOllamaUsage,
@@ -37,7 +39,7 @@ import {
  * @param {Object} connection - Provider connection with accessToken
  * @returns {Object} Usage data with quotas
  */
-// provider â†’ usage handler (ctx carries every arg each handler needs)
+// provider → usage handler (ctx carries every arg each handler needs)
 const USAGE_HANDLERS = {
   github: (c) => getGitHubUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   "gemini-cli": (c) => getGeminiUsage(c.accessToken, c.providerDataWithProjectId, c.proxyOptions),
@@ -54,7 +56,7 @@ const USAGE_HANDLERS = {
   "glm-cn": (c) => getGlmUsage(c.apiKey || c.accessToken, c.provider, c.proxyOptions),
   minimax: (c) => getMiniMaxUsage(c.apiKey, c.provider, c.proxyOptions),
   "minimax-cn": (c) => getMiniMaxUsage(c.apiKey, c.provider, c.proxyOptions),
-  // MiniMax Code (mcode) credits lane â€” signed account API + plan windows
+  // MiniMax Code (mcode) credits lane — signed account API + plan windows
   "minimax-code": (c) => getMiniMaxCodeUsage(c),
   "minimax-code-global": (c) => getMiniMaxCodeUsage(c),
   "vercel-ai-gateway": (c) => getVercelAiGatewayUsage(c.apiKey, c.proxyOptions),
@@ -70,7 +72,10 @@ const USAGE_HANDLERS = {
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   commandcode: (c) => getCommandCodeUsage(c.apiKey, c.proxyOptions),
   freebuff: (c) => getFreebuffUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  synthetic: (c) => getSyntheticUsage(c.apiKey, c.proxyOptions),
   cursor: (c) => getCursorUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  // OAuth WorkOS JWT (workos: prefix) or plain ClinePass API key — same usage-limits URL.
+  clinepass: (c) => getClinepassUsage(c.accessToken, c.apiKey, c.proxyOptions),
 };
 
 // Qoder intl/CN share one usage path: PATs must be exchanged to a job token
@@ -92,6 +97,7 @@ export async function getUsageForProvider(connection, proxyOptions = null, optio
   if (!handler) return { message: `Usage API not implemented for ${provider}` };
   return await handler({
     provider,
+    authType: connection.authType,
     accessToken,
     apiKey,
     providerSpecificData,

@@ -85,4 +85,22 @@ describe("opencodeTlsClient", () => {
 
     expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal);
   });
+
+  it("drops the cached session on 429 so the next attempt redials a fresh exit", async () => {
+    const first = { fetch: vi.fn().mockResolvedValue(new Response("busy", { status: 429 })), close: vi.fn() };
+    const second = { fetch: vi.fn().mockResolvedValue(new Response("ok", { status: 200 })), close: vi.fn() };
+    createSessionMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+
+    const { opencodeTlsFetch } = await import("../../open-sse/services/opencodeTlsClient.js");
+    const throttled = await opencodeTlsFetch("https://opencode.ai/a", {}, { proxyUrl: "http://p1:8080" });
+
+    // The error body stays readable after the session is torn down.
+    expect(throttled.status).toBe(429);
+    expect(await throttled.text()).toBe("busy");
+    expect(first.close).toHaveBeenCalled();
+
+    const retried = await opencodeTlsFetch("https://opencode.ai/a", {}, { proxyUrl: "http://p1:8080" });
+    expect(retried.status).toBe(200);
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+  });
 });

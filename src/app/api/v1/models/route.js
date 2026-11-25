@@ -14,6 +14,7 @@ import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -31,7 +32,7 @@ async function resolveQoderLiveModels(conn, provider) {
     displayName: conn.displayName,
     providerSpecificData: conn.providerSpecificData || {}
   });
-  // Visible + hidden (enable:false) catalog keys â€” chat routes all of them.
+  // Visible + hidden (enable:false) catalog keys — chat routes all of them.
   const models = routableQoderModels(result);
   if (!models.length) return null;
   return { models: models.map((m) => ({ id: m.id, name: m.name })) };
@@ -167,6 +168,14 @@ const LIVE_MODEL_RESOLVERS = {
         })),
     };
   },
+  // CommandCode's catalog is public and account-independent, so no per-connection
+  // credentials are needed — the connection only has to exist and be active.
+  commandcode: async () => {
+    const { resolveCommandCodeModels } = await import("open-sse/services/commandcodeModels.js");
+    const result = await resolveCommandCodeModels();
+    if (!result?.models?.length) return null;
+    return { models: result.models.map(({ id, name }) => ({ id, name })) };
+  },
 };
 
 const parseOpenAIStyleModels = (data) => {
@@ -178,7 +187,7 @@ const parseOpenAIStyleModels = (data) => {
 // and break recursive loops between 9router instances connected to each other.
 const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
 
-// LLM kind sentinel â€” combos/models with no explicit kind default to LLM
+// LLM kind sentinel — combos/models with no explicit kind default to LLM
 const LLM_KIND = "llm";
 
 // Map per-model `type` field (in PROVIDER_MODELS) to service kind.
@@ -282,8 +291,8 @@ function comboMatchesKinds(combo, kindFilter) {
   return kindFilter.includes(kind);
 }
 
-// Nested combo names are valid seats â€” the model selector exposes them and
-// chat routing resolves them recursively â€” but a no-slash seat is otherwise
+// Nested combo names are valid seats — the model selector exposes them and
+// chat routing resolves them recursively — but a no-slash seat is otherwise
 // treated as a literal model and publishes the 200k floor. Expand nested
 // names (cycle-guarded) so the published window is the true min across the
 // whole chain.
@@ -329,7 +338,7 @@ function comboSeatLimits(combo, combosByName, visiting = new Set()) {
  */
 export async function buildModelsList(kindFilter, options = {}) {
   // When this header is present, the /v1/models request came from another
-  // 9router instance's fetchCompatibleModelIds â€” skip dynamic fetch to break
+  // 9router instance's fetchCompatibleModelIds — skip dynamic fetch to break
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
   let connections = [];
@@ -410,7 +419,7 @@ export async function buildModelsList(kindFilter, options = {}) {
       if (comboCaps) entry.capabilities = comboCaps;
       // Any seat can serve the request, so the only window a combo can promise is
       // its smallest. Combo entries were the only models on this endpoint that
-      // published no limits at all, which leaves a client to guess from the name â€”
+      // published no limits at all, which leaves a client to guess from the name —
       // and it guesses high (see the snake_case note on the per-provider path).
       const { contextWindow, maxOutput } = comboSeatLimits(combo, combosByName);
       if (Number.isFinite(contextWindow)) entry.context_length = contextWindow;
@@ -589,7 +598,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           owned_by: outputAlias,
         };
         // Live-catalog resolvers (kiro/qoder/github/clinepass) mostly only return
-        // { id, name } â€” no per-model capability data. Fall back to the same
+        // { id, name } — no per-model capability data. Fall back to the same
         // pattern-matched capabilities the dashboard uses (useModelCaps.js) so
         // dynamically-discovered LLM models still surface vision/reasoning/search/tools.
         const liveCaps = liveCapabilitiesById.get(modelId);
@@ -599,7 +608,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         // Token limits under the snake_case names the OpenAI/OpenRouter
         // convention uses. `capabilities.contextWindow` is camelCase and nested,
         // so clients matching context_length find nothing, fall back to guessing
-        // the window from the model name, and guess high â€” a 372k model read as
+        // the window from the model name, and guess high — a 372k model read as
         // 1.05M never reaches its compaction threshold and hard-fails upstream.
         // Emitted at top level because not every client recurses into nested
         // objects; the camelCase `capabilities` block stays for compatibility.
@@ -616,11 +625,16 @@ export async function buildModelsList(kindFilter, options = {}) {
           }
           if (Number.isFinite(contextWindow)) model.context_length = contextWindow;
           if (Number.isFinite(maxOutput)) model.max_completion_tokens = maxOutput;
+          // Selectable reasoning levels (the set the dashboard picker shows) so clients
+          // can build their effort selector from the gateway instead of keeping a
+          // per-model table. Omitted when the model has no reasoning.
+          const thinkingLevels = getThinkingLevels(providerId, modelId);
+          if (Array.isArray(thinkingLevels) && thinkingLevels.length > 0) model.thinking_levels = thinkingLevels;
         }
         models.push(model);
       }
 
-      // Web search/fetch â€” provider IS the model, expose as {alias}/search and/or {alias}/fetch with explicit kind
+      // Web search/fetch — provider IS the model, expose as {alias}/search and/or {alias}/fetch with explicit kind
       const providerInfo = AI_PROVIDERS[providerId];
       if (kindFilter.includes("webSearch") && providerInfo?.searchConfig) {
         models.push({
