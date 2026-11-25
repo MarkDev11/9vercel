@@ -55,6 +55,8 @@ const ALWAYS_PROTECTED = [
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
+  "/api/oauth/minimax-code/lease",
+  "/api/oauth/minimax-code-global/lease",
 ];
 
 // Require auth, but allow through if requireLogin is disabled
@@ -92,6 +94,8 @@ const LOCAL_ONLY_PATHS = [
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
+  "/api/oauth/minimax-code/lease",
+  "/api/oauth/minimax-code-global/lease",
   "/api/auth/reset-password",
   "/api/headroom/start",
   "/api/headroom/stop",

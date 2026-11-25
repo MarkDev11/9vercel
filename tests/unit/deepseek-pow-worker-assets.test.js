@@ -39,14 +39,14 @@ describe("deepseek-pow worker assets", () => {
   });
 
   it("solves a challenge through the spawned worker", async () => {
-    const { deepSeekHashV1 } = await import("../../open-sse/lib/deepseek-pow-hash.mjs");
     const { solveDeepSeekPowAsync } = await import("../../open-sse/lib/deepseek-pow.js");
     const salt = "salt";
     const expireAt = 12345;
-    const prefix = `${salt}_${expireAt}_`;
-    const target = deepSeekHashV1(`${prefix}0`);
+    // Digest of "salt_12345_0", pinned so the test does not depend on the hash
+    // module exporting a single-shot helper (upstream keeps only the nonce
+    // search after the v0.5.112 rewrite).
+    const target = "fc04a0e7945fffcc7f9bbf2bc90ba6636308eb28535a144678cd706e55b86c14";
     const nonce = await solveDeepSeekPowAsync("DeepSeekHashV1", target, salt, 200000, expireAt);
     expect(nonce).toBe(0);
-    expect(deepSeekHashV1(`${prefix}${nonce}`)).toBe(target);
   });
 });
