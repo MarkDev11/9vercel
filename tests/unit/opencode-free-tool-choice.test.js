@@ -8,12 +8,14 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(async () => ({ ok: true, status: 200, headers: { get: () => "" } })),
 }));
 
-// Break caught: opencode/muse-spark-1.3-contributor-free 400 vÃ¬ upstream
-// chá»‰ nháº­n tool_choice "auto"; named/required/none pháº£i demote sang "auto".
+// Break caught: opencode/muse-spark-1.3-contributor-free 400 because upstream
+// only accepts tool_choice "auto"; named/required/none must be demoted to "auto".
 const FREE_13 = "muse-spark-1.3-contributor-free";
 const CREDS = { connectionId: "opencode-free-tool-choice-test" };
 const INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
 const TOOLS = [{ type: "function", name: "get_weather", description: "w", parameters: { type: "object", properties: {} } }];
+// Free-tier gate: client tools pass through verbatim, then the fingerprint
+// read/shell definitions are appended or upstream answers 403 FreeTierError.
 const WIRE_TOOLS = [...TOOLS, ...OPENCODE_FINGERPRINT_TOOLS.map((name) => expect.objectContaining({ type: "function", name }))];
 
 function responsesBody(model, tool_choice) {
@@ -23,7 +25,7 @@ function responsesBody(model, tool_choice) {
 }
 
 describe("opencode Free 1.3 tool_choice auto-only", () => {
-  it("khai quirk Ä‘Ãºng model 1.3-Free trong registry", () => {
+  it("declares the quirk on the right 1.3-Free model in the registry", () => {
     expect(PROVIDERS.opencode.quirks?.forceAutoToolChoiceModels).toEqual([FREE_13]);
   });
 
@@ -33,7 +35,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     ["Claude tool named", { type: "tool", name: "get_weather" }],
     ["required", "required"],
     ["none", "none"],
-  ])("demote %s sang auto (plain vÃ  max)", (_label, choice) => {
+  ])("demotes %s to auto (plain and max)", (_label, choice) => {
     for (const model of [FREE_13, `${FREE_13}(max)`]) {
       const body = responsesBody(model, structuredClone(choice));
       const out = new OpenCodeExecutor().transformRequest(model, body, true, CREDS);
@@ -43,7 +45,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     }
   });
 
-  it("giá»¯ auto; absent defaults to auto; tools/input nguyÃªn váº¹n", () => {
+  it("keeps auto and absent; tools/input intact", () => {
     const autoOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, "auto"), true, CREDS,
     );
@@ -65,14 +67,14 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     ["future 1.4-Free", "muse-spark-1.4-contributor-free"],
     ["Go id", "muse-spark-1.3-contributor"],
     ["non-Muse", "big-pickle"],
-  ])("khÃ´ng Ä‘á»•i tool_choice cá»§a %s", (_label, model) => {
+  ])("does not change tool_choice for %s", (_label, model) => {
     const choice = { type: "function", name: "get_weather" };
     const body = responsesBody(model, structuredClone(choice));
     const out = new OpenCodeExecutor().transformRequest(model, body, true, CREDS);
     expect(out.tool_choice).toEqual(choice);
   });
 
-  it("wire: execute gá»­i choice auto tá»›i /inference/v1/responses", async () => {
+  it("wire: execute sends the auto choice to /inference/v1/responses", async () => {
     proxyAwareFetch.mockClear();
     const ex = new OpenCodeExecutor();
     const body = responsesBody(FREE_13, { type: "function", name: "get_weather" });

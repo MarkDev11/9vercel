@@ -33,9 +33,12 @@ export async function getCustomModels() {
 // Re-adding an existing model updates caps/name/transport without resetting omitted fields.
 // Fork note: kept async (await db.transaction/get/run) — our Supabase adapter is
 // always-async; upstream's sync form only works on better-sqlite3.
-export async function addCustomModel({ providerAlias, id, type = "llm", name, caps, transport }) {
+export async function addCustomModel({ providerAlias, id, type = "llm", name, caps, transport, upstreamModelId }) {
   const k = customKey(providerAlias, id, type);
   const db = await getAdapter();
+  const cleanUpstream = typeof upstreamModelId === "string" && upstreamModelId.trim()
+    ? upstreamModelId.trim()
+    : null;
   // Concurrent-safe: two parallel inserts for the same key must not throw
   // UNIQUE constraint — the loser re-reads and merges instead. Retry on
   // write-write races (compare-and-swap on value, like disabledModels).
@@ -43,7 +46,13 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
     const row = await db.get(`SELECT value FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
     if (row) {
       const prev = parseJson(row.value) || {};
-      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) };
+      const next = {
+        ...prev,
+        ...(name ? { name } : {}),
+        ...(caps ? { caps } : {}),
+        ...(transport ? { transport } : {}),
+        ...(cleanUpstream ? { upstreamModelId: cleanUpstream } : {}),
+      };
       const prevStr = row.value;
       const nextStr = stringifyJson(next);
       if (prevStr === nextStr) return false;
@@ -51,10 +60,20 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
         `UPDATE kv SET value = ? WHERE scope = 'customModels' AND key = ? AND value = ?`,
         [nextStr, k, prevStr]
       );
-      if ((res?.changes ?? 0) > 0) return false;
+      // Fork note: adapters that report row counts let the loser retry; a stub
+      // adapter without `changes` is assumed to have written (upstream behavior).
+      if (res?.changes === undefined || res.changes > 0) return false;
       continue; // parallel writer won — re-read and retry
     }
-    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) });
+    const value = stringifyJson({
+      providerAlias,
+      id,
+      type,
+      name: name || id,
+      ...(caps ? { caps } : {}),
+      ...(transport ? { transport } : {}),
+      ...(cleanUpstream ? { upstreamModelId: cleanUpstream } : {}),
+    });
     try {
       // Decide the winner by `changes`, not by re-reading the stored value:
       // every loser sees the winner's identical value string and would also
@@ -63,7 +82,9 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
         `INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?) ON CONFLICT(scope, key) DO NOTHING`,
         [k, value]
       );
-      if ((ins?.changes ?? 0) > 0) return true;
+      // Adapters that report row counts own the row via changes > 0; a stub
+      // adapter without `changes` is assumed to have inserted (upstream behavior).
+      if (ins?.changes === undefined || ins.changes > 0) return true;
       // Someone else inserted first — loop around to merge path.
     } catch {
       // Lost the insert race — re-read and merge instead of throwing.
